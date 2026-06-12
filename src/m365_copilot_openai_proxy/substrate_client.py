@@ -1,80 +1,71 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import os
 import time
 import uuid
 from collections.abc import AsyncIterator
+from pathlib import Path
 from urllib.parse import quote
 
+import httpx
 import websockets
 
+from .models import ExtractedImage, MessageAnnotation, UploadFileResponse
 from .session_store import PersistentSession
+from .substrate_config import load_substrate_config
 from .token_store import decode_jwt_payload, is_substrate_token_claims
 
 SIGNALR_SEP = "\x1e"
-_WS_BASE = "wss://substrate.office.com/m365Copilot/Chathub"
 
-_VARIANTS = (
-    "EnableMcpServerWidgets,feature.EnableMcpServerWidgets,feature.EnableLuForChatCIQ,"
-    "feature.enableChatCIQPlugin,EnableRequestPlugins,feature.EnableSensitivityLabels,"
-    "EnableUnsupportedUrlDetector,feature.IsCustomEngineCopilotEnabled,feature.bizchatfluxv3,"
-    "feature.enablechatpages,feature.enableCodeCanvas,feature.turnOnWorkTabRecommendation,"
-    "feature.turnOnDARecommendation,feature.IsStreamingModeInChatRequestEnabled,"
-    "IncludeSourceAttributionsConcise,SkipPublishEmptyMessage,"
-    "feature.EnableDeduplicatingSourceAttributions,Enable3PActionProgressMessages,"
-    "feature.enableClientWebRtc,feature.EnableMeetingRecapOfSeriesMeetingWithCiq,"
-    "feature.EnableReferencesListCompleteSignal,feature.StorageMessageSplitDisabled,"
-    "feature.EnableCuaTakeControlApi,SingletonEnvOn,feature.cwcallowedos,"
-    "feature.EnableMergingPureDeltas,feature.disabledisallowedmsgs,"
-    "feature.enableCitationsForSynthesisData,feature.EnableConversationShareApis,"
-    "feature.enableGenerateGraphicArtOptionsSet,cdximagen,"
-    "feature.EnableUpdatedUXForConfirmationDialog,"
-    "feature.EnableContentApiandDocTypeHtmlInRichAnswers,"
-    "cdxgrounding_api_v2_rich_web_answers_reference_bottom_force,"
-    "cdxenablerenderforisocomp,feature.EnableClientFileURLSupportForOfficeWebPaidCopilot,"
-    "feature.EnableDesignEditorImageGrounding,feature.EnableDesignerEditor,"
-    "feature.EnableSkipRehydrationForSpeCIdImages,feature.EnableSkipEmittingMessageOnFlush,"
-    "feature.EnableRemoveEmptySourceAttributions,feature.EnableRemoveStreamingMode,"
-    "feature.OfficeWebToHelix,feature.OfficeDesktopToHelix,feature.M365TeamsHubToHelix,"
-    "feature.OwaHubToHelix,feature.MonarchHubToHelix,feature.Win32OutlookHubToHelix,"
-    "feature.MacOutlookHubToHelix,Agt_bizchat_enableGpt5ForHelix"
-)
+# Capture-derived protocol payload (see substrate.json / M365_SUBSTRATE_CONFIG). The frame
+# *skeleton* stays in code below; only these data values come from config.
+_CFG = load_substrate_config()
+_WS_BASE = _CFG["ws_base"]
+_UPLOAD_URL = _CFG["upload_url"]
+_ORIGIN = _CFG["origin"]
+# Default to Opus: "Magic" (the included-tier Auto tone) hangs under Premium/officeweb.
+DEFAULT_TONE: str = _CFG["default_tone"]
+# Model picker -> substrate `tone` value (captured from the real web client).
+MODEL_TO_TONE: dict[str, str] = _CFG["model_to_tone"]
+_VARIANTS = ",".join(_CFG["variants"])
+_OPTIONS_SETS = _CFG["options_sets"]
+# Sent as repeated multipart fields on UploadFile (captured from the web client).
+_UPLOAD_OPTIONS_SETS = _CFG["upload_options_sets"]
+_UPLOAD_VARIANTS = _CFG["upload_variants"]
+# Extra optionsSets the WS frame carries when the turn includes an uploaded image.
+_IMAGE_FRAME_OPTIONS_SETS = _CFG["image_frame_options_sets"]
+_ALLOWED_MESSAGE_TYPES = _CFG["allowed_message_types"]
+_FRAME = _CFG["frame"]
 
-_OPTIONS_SETS = [
-    "search_result_progress_messages_with_search_queries",
-    "cwc_flux_image",
-    "cwc_code_interpreter",
-    "cwc_code_interpreter_amsfix",
-    "cwcfluxgptv",
-    "flux_v3_gptv_enable_upload_multi_image_in_turn_wo_ch",
-    "cwc_code_interpreter_citation_fix",
-    "code_interpreter_interactive_charts",
-    "cwc_code_interpreter_interactive_charts_inline_image",
-    "code_interpreter_matplotlib_patching",
-    "cwc_fileupload_odb",
-    "update_memory_plugin",
-    "add_custom_instructions",
-    "cwc_flux_v3",
-    "flux_v3_progress_messages",
-    "enable_batch_token_processing",
-    "enable_gg_gpt",
-    "flux_v3_image_gen_enable_dimensions",
-    "flux_v3_image_gen_enable_icon_dimensions",
-    "flux_v3_image_gen_enable_system_text_with_params",
-    "flux_v3_image_gen_enable_designer_dimensions_meta_prompting_in_system_prompts",
-]
+# Default seconds without any frame from substrate before we give up (instead of hanging).
+# Overridable per-client via Settings (.env M365_RECV_TIMEOUT / M365_OPEN_TIMEOUT).
+_RECV_TIMEOUT = 90
+_OPEN_TIMEOUT = 30
 
-_ALLOWED_MESSAGE_TYPES = [
-    "Chat", "Suggestion", "InternalSearchQuery", "Disengaged",
-    "InternalLoaderMessage", "Progress", "GeneratedCode", "RenderCardRequest",
-    "AdsQuery", "SemanticSerp", "GenerateContentQuery", "GenerateGraphicArt",
-    "SearchQuery", "ConfirmationCard", "AuthError", "DeveloperLogs",
-    "TriggerPlugin", "HintInvocation", "MemoryUpdate", "EndOfRequest",
-    "TriggerConfirmation", "ResumeInvokeAction", "ResumeUserInputRequest",
-    "TriggerUserInputRequest", "EscapeHatch", "TriggerPluginAuth",
-    "ResumePluginAuth", "SideBySide", "ReferencesListComplete",
-    "SwitchRespondingEndpoint",
-]
+
+def resolve_tone(model: str | None) -> str:
+    if not model:
+        return DEFAULT_TONE
+    base = model.split(":", 1)[0].strip().lower()
+    return MODEL_TO_TONE.get(base, DEFAULT_TONE)
+
+
+def _emit_timing(**fields: object) -> None:
+    """One parseable `TIMING ...` line per turn to debug.log when M365_TIMING is set."""
+    if not os.environ.get("M365_TIMING"):
+        return
+    try:
+        line = "TIMING " + " ".join(f"{k}={v}" for k, v in fields.items())
+        with Path("debug.log").open("a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except Exception:
+        pass
+
+
+def _ms(start: float, end: float) -> int:
+    return round((end - start) * 1000)
 
 
 class SubstrateCopilotError(RuntimeError):
@@ -82,7 +73,15 @@ class SubstrateCopilotError(RuntimeError):
 
 
 class SubstrateCopilotClient:
-    def __init__(self, access_token: str, time_zone: str = "Asia/Tokyo"):
+    def __init__(
+        self,
+        access_token: str,
+        time_zone: str = "Asia/Tokyo",
+        work_grounding: bool = True,
+        recv_timeout: int = _RECV_TIMEOUT,
+        open_timeout: int = _OPEN_TIMEOUT,
+        disable_memory: bool = True,
+    ):
         if not access_token:
             raise SubstrateCopilotError(
                 "M365_ACCESS_TOKEN is missing. Start the debug Edge window and let startup token capture complete, "
@@ -90,6 +89,10 @@ class SubstrateCopilotClient:
             )
         self._token = access_token
         self._time_zone = time_zone
+        self._work_grounding = work_grounding
+        self._recv_timeout = recv_timeout
+        self._open_timeout = open_timeout
+        self._disable_memory = disable_memory
         try:
             claims = decode_jwt_payload(access_token)
         except Exception as exc:
@@ -107,15 +110,21 @@ class SubstrateCopilotClient:
 
     def _ws_url(self, conv_id: str, session_id: str, req_id: str) -> str:
         token = quote(self._token, safe="")
+        session_key = uuid.uuid4().hex
         return (
             f"{_WS_BASE}/{self._oid}@{self._tid}"
-            f"?ClientRequestId={req_id}"
+            f"?chatsessionid={session_key}"
+            f"&XRoutingParameterSessionKey={session_key}"
+            f"&clientrequestid={session_key}"
             f"&X-SessionId={session_id}"
             f"&ConversationId={conv_id}"
             f"&access_token={token}"
             f"&variants={_VARIANTS}"
-            f"&source=officeweb&product=Office&agentHost=Bizchat.FullScreen"
-            f"&licenseType=Starter&agent=web&scenario=OfficeWebIncludedCopilot"
+            f"&source={_FRAME['source']}&product={_FRAME['product']}&agentHost={_FRAME['agent_host']}"
+            f"&licenseType={_FRAME['license_type']}&isEdu={_FRAME['is_edu']}"
+            f"&agent={'work' if self._work_grounding else 'web'}&scenario={_FRAME['scenario']}"
+            # Temporary/private chat: not saved to history, no memories (captured: incognito toggle).
+            + ("&disableMemory=1" if self._disable_memory else "")
         )
 
     def _chat_invoke(
@@ -125,15 +134,37 @@ class SubstrateCopilotClient:
         session_id: str,
         req_id: str,
         is_start_of_session: bool,
+        tone: str = DEFAULT_TONE,
+        annotations: list[MessageAnnotation] | None = None,
     ) -> str:
+        ci = _FRAME["client_info"]
+        message = {
+            "author": "user",
+            "inputMethod": "Keyboard",
+            "text": text,
+            "entityAnnotationTypes": _FRAME["entity_annotation_types"],
+            "requestId": req_id,
+            "locationInfo": {"timeZoneOffset": _FRAME["location_time_zone_offset"], "timeZone": self._time_zone},
+            "locale": _FRAME["locale"],
+            "messageType": "Chat",
+            "experienceType": "Default",
+            "adaptiveCards": [],
+            "clientPreferences": {},
+        }
+        options_sets = _OPTIONS_SETS
+        if annotations:
+            message["messageAnnotations"] = annotations
+            options_sets = _OPTIONS_SETS + [
+                o for o in _IMAGE_FRAME_OPTIONS_SETS if o not in _OPTIONS_SETS
+            ]
         payload = {
             "arguments": [{
-                "source": "officeweb",
+                "source": _FRAME["source"],
                 "clientCorrelationId": req_id,
                 "sessionId": session_id,
-                "optionsSets": _OPTIONS_SETS,
-                "streamingMode": "ConciseWithPadding",
-                "spokenTextMode": "None",
+                "optionsSets": options_sets,
+                "streamingMode": _FRAME["streaming_mode"],
+                "spokenTextMode": _FRAME["spoken_text_mode"],
                 "options": {},
                 "extraExtensionParameters": {},
                 "allowedMessageTypes": _ALLOWED_MESSAGE_TYPES,
@@ -142,30 +173,18 @@ class SubstrateCopilotClient:
                 "traceId": req_id,
                 "isStartOfSession": is_start_of_session,
                 "clientInfo": {
-                    "clientPlatform": "mcmcopilot-web",
-                    "clientAppName": "Office",
-                    "clientEntrypoint": "mcmcopilot-officeweb",
+                    "clientPlatform": ci["clientPlatform"],
+                    "clientAppName": ci["clientAppName"],
+                    "clientEntrypoint": ci["clientEntrypoint"],
                     "clientSessionId": session_id,
-                    "clientAppType": "Web",
-                    "deviceOS": "Windows",
-                    "deviceType": "Desktop",
+                    "clientAppType": ci["clientAppType"],
+                    "deviceOS": ci["deviceOS"],
+                    "deviceType": ci["deviceType"],
                 },
-                "message": {
-                    "author": "user",
-                    "inputMethod": "Keyboard",
-                    "text": text,
-                    "entityAnnotationTypes": ["People", "File", "Event", "Email", "TeamsMessage"],
-                    "requestId": req_id,
-                    "locationInfo": {"timeZoneOffset": 9, "timeZone": self._time_zone},
-                    "locale": "en-us",
-                    "messageType": "Chat",
-                    "experienceType": "Default",
-                    "adaptiveCards": [],
-                    "clientPreferences": {},
-                },
-                "plugins": [{"Id": "BingWebSearch", "Source": "BuiltIn"}],
+                "message": message,
+                "plugins": _FRAME["plugins"],
                 "isSbsSupported": True,
-                "tone": "Magic",
+                "tone": tone,
                 "renderReferencesBehindEOS": True,
             }],
             "invocationId": "0",
@@ -179,6 +198,8 @@ class SubstrateCopilotClient:
         prompt: str,
         additional_context: list[str],
         session: PersistentSession | None = None,
+        tone: str = DEFAULT_TONE,
+        images: list[ExtractedImage] | None = None,
     ) -> AsyncIterator[str]:
         text = _combine_text(prompt, additional_context)
         if session is None:
@@ -187,6 +208,8 @@ class SubstrateCopilotClient:
                 conv_id=str(uuid.uuid4()),
                 session_id=str(uuid.uuid4()),
                 is_start_of_session=True,
+                tone=tone,
+                images=images,
             ):
                 yield chunk
             return
@@ -198,8 +221,44 @@ class SubstrateCopilotClient:
                 conv_id=turn.conversation_id,
                 session_id=turn.client_session_id,
                 is_start_of_session=turn.is_start_of_session,
+                tone=tone,
+                images=images,
             ):
                 yield chunk
+
+    async def _upload_image(self, conv_id: str, image: ExtractedImage) -> MessageAnnotation | None:
+        """Upload one image to substrate, returning its `messageAnnotation` (carrying the
+        docId), or None if the upload failed. The image must be uploaded under the same
+        conversationId the prompt frame will use, before that frame is sent."""
+        form = [
+            ("scenario", (None, "UploadImage")),
+            ("conversationId", (None, conv_id)),
+            ("FileBase64", (None, image.data_uri)),
+        ] + [("optionsSets", (None, o)) for o in _UPLOAD_OPTIONS_SETS]
+        headers = {
+            "Authorization": f"Bearer {self._token}",
+            "x-anchormailbox": f"Oid:{self._oid}@{self._tid}",
+            "x-scenario": _FRAME["scenario"],
+            "x-variants": _UPLOAD_VARIANTS,
+            "Origin": _ORIGIN,
+        }
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.post(_UPLOAD_URL, files=form, headers=headers)
+        resp.raise_for_status()
+        body: UploadFileResponse = resp.json()
+        doc_id = body.get("docId")
+        if not doc_id:
+            return None
+        return {
+            "id": doc_id,
+            "messageAnnotationMetadata": {
+                "@type": "File",
+                "annotationType": "File",
+                "fileType": image.file_type,
+                "fileName": image.file_name,
+            },
+            "messageAnnotationType": "ImageFile",
+        }
 
     async def _chat_stream_for_turn(
         self,
@@ -207,22 +266,46 @@ class SubstrateCopilotClient:
         conv_id: str,
         session_id: str,
         is_start_of_session: bool,
+        tone: str = DEFAULT_TONE,
+        images: list[ExtractedImage] | None = None,
     ) -> AsyncIterator[str]:
         req_id = str(uuid.uuid4())
+        annotations: list[MessageAnnotation] = []
+        for image in images or []:
+            ann = await self._upload_image(conv_id, image)
+            if ann:
+                annotations.append(ann)
         url = self._ws_url(conv_id, session_id, req_id)
+        t0 = time.perf_counter()
         try:
             async with websockets.connect(
                 url,
                 additional_headers={
-                    "Origin": "https://m365.cloud.microsoft",
+                    "Origin": _ORIGIN,
                 },
+                open_timeout=self._open_timeout,   # substrate handshake can exceed the 10s default under load
+                max_size=None,     # substrate replies (file contents, etc.) can be large
             ) as ws:
+                t_conn = time.perf_counter()
                 await ws.send(json.dumps({"protocol": "json", "version": 1}) + SIGNALR_SEP)
-                await ws.recv()
-                await ws.send(self._chat_invoke(text, conv_id, session_id, req_id, is_start_of_session))
+                await asyncio.wait_for(ws.recv(), timeout=self._recv_timeout)
+                t_nego = time.perf_counter()
+                await ws.send(self._chat_invoke(
+                    text, conv_id, session_id, req_id, is_start_of_session, tone,
+                    annotations=annotations or None,
+                ))
+                t_sent = time.perf_counter()
                 fallback_text = ""
                 yielded_any = False
-                async for raw in ws:
+                first_delta: float | None = None
+                while True:
+                    try:
+                        raw = await asyncio.wait_for(ws.recv(), timeout=self._recv_timeout)
+                    except asyncio.TimeoutError as exc:
+                        raise SubstrateCopilotError(
+                            f"No response from substrate within {self._recv_timeout}s "
+                            f"(tone={tone!r} may be invalid for this license/scenario)."
+                        ) from exc
                     for part in raw.split(SIGNALR_SEP):
                         part = part.strip()
                         if not part:
@@ -238,6 +321,8 @@ class SubstrateCopilotClient:
                             args = (msg.get("arguments") or [{}])[0]
                             delta = args.get("writeAtCursor")
                             if delta:
+                                if first_delta is None:
+                                    first_delta = time.perf_counter()
                                 if not yielded_any and fallback_text:
                                     yield fallback_text
                                 yielded_any = True
@@ -257,7 +342,16 @@ class SubstrateCopilotClient:
                                     break
                         if t == 3:
                             if not yielded_any and fallback_text:
+                                if first_delta is None:
+                                    first_delta = time.perf_counter()
                                 yield fallback_text
+                            _emit_timing(
+                                connect_ms=_ms(t0, t_conn),
+                                negotiate_ms=_ms(t_conn, t_nego),
+                                ttft_ms=_ms(t_sent, first_delta) if first_delta else -1,
+                                total_ms=_ms(t_sent, time.perf_counter()),
+                                reused=0,
+                            )
                             return
         except SubstrateCopilotError:
             raise
@@ -269,14 +363,22 @@ class SubstrateCopilotClient:
         prompt: str,
         additional_context: list[str],
         session: PersistentSession | None = None,
+        tone: str = DEFAULT_TONE,
+        images: list[ExtractedImage] | None = None,
     ) -> str:
         chunks: list[str] = []
-        async for chunk in self.chat_stream(prompt, additional_context, session):
+        async for chunk in self.chat_stream(prompt, additional_context, session, tone, images):
             chunks.append(chunk)
         return "".join(chunks)
 
 
 def _combine_text(prompt: str, context: list[str]) -> str:
+    # Lead with the actual request; trailing context is reference only. (Putting a large
+    # transcript/workspace dump first buries the real message and the model loses focus.)
     if not context:
         return prompt
-    return "\n\n".join(context) + "\n\n---\n\n" + prompt
+    return (
+        prompt
+        + "\n\n---\n# Reference context (prior conversation / workspace, for grounding only)\n\n"
+        + "\n\n".join(context)
+    )

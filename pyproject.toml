@@ -27,5 +27,10 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/m365_copilot_openai_proxy"]
 
+# Ship the non-Python config data (capture-derived protocol payload + prompt message bundle).
+[tool.hatch.build.targets.wheel.force-include]
+"src/m365_copilot_openai_proxy/substrate.json" = "m365_copilot_openai_proxy/substrate.json"
+"src/m365_copilot_openai_proxy/messages.properties" = "m365_copilot_openai_proxy/messages.properties"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

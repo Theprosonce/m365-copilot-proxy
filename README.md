@@ -6,14 +6,22 @@ This project runs a local FastAPI proxy that talks to the same `substrate.office
 
 No Azure app registration. No admin consent. Sign in with your normal M365 Copilot browser session.
 
+> Fork of [kuchris/m365-copilot-openai-proxy](https://github.com/kuchris/m365-copilot-openai-proxy), extended with a model picker, vision, a tool-calling shim, temporary chats, and a session-management API.
+
 ## Why Use This
 
 - Use M365 Copilot from OpenAI-compatible clients
 - Works with your existing signed-in Copilot web session
 - Runs locally on `127.0.0.1` by default
 - Auto-captures and refreshes the short-lived browser token
-- Supports persistent Copilot sessions across turns
+- **Model picker** — choose Claude Opus or GPT‑5.5 (quick / reasoning) via the model name
+- **Work / Web grounding** toggle
+- **Vision** — forwards images (OpenAI `image_url` base64 and VS Code attachments) to Copilot
+- **Tool-calling shim** — a ReAct bridge so agentic clients (OpenCode, VS Code, Claude Code) can drive tools, even though Copilot returns only text
+- **Temporary chats** by default — proxy conversations are not saved to your Copilot history and produce no memories
+- **Per-chat persistence** in SQLite, plus a CRUD API over the tracked conversations
 - Supports OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages style requests
+- Interactive **OpenAPI docs** at `/docs`
 
 ## Quick Start
 
@@ -65,8 +73,19 @@ Use these settings for any OpenAI-compatible client:
 |---|---|
 | Base URL | `http://127.0.0.1:8000/v1` |
 | API Key | `dummy` |
-| Model | `m365-copilot` |
-| Persistent model | `m365-copilot:persist` |
+| Model | `m365-opus` (or any id below) |
+
+### Models (picker)
+
+The model name selects the underlying Copilot model (substrate `tone`). `GET /v1/models` lists them.
+
+| Model id | Underlying model |
+|---|---|
+| `m365-copilot`, `m365-auto`, `m365-opus`, `m365-claude` | Claude Opus |
+| `m365-gpt`, `m365-gpt-quick` | GPT‑5.5 (quick) |
+| `m365-gpt-think`, `m365-gpt-reasoning` | GPT‑5.5 (reasoning) |
+
+Append `:persist` to any id (e.g. `m365-opus:persist`) to reuse one Copilot conversation per chat.
 
 ### OpenCode
 
@@ -114,27 +133,81 @@ $env:ANTHROPIC_API_KEY = "dummy"
 claude
 ```
 
-Claude Code note: this proxy does not implement tool use. It can answer general prompts, but agentic features such as file reading, bash, and code editing still require the real Anthropic API.
+Claude Code note: agentic tool use works through a best-effort ReAct **tool-calling shim** (see below). Copilot returns only text, so the proxy injects the tool schemas into the prompt and parses the model's reply back into `tool_calls`. It is functional but less reliable than a model with native function calling.
+
+### VS Code
+
+There are two ways to use the proxy inside VS Code.
+
+#### 1. As a model in Copilot Chat (Bring Your Own Model)
+
+This makes M365 Copilot appear in the VS Code Chat model picker, with tools and vision.
+
+Edit `chatLanguageModels.json` in your VS Code user folder:
+
+- Windows: `%APPDATA%\Code\User\chatLanguageModels.json`
+- macOS: `~/Library/Application Support/Code/User/chatLanguageModels.json`
+- Linux: `~/.config/Code/User/chatLanguageModels.json`
+
+```json
+{
+  "name": "Custom Endpoint",
+  "vendor": "customendpoint",
+  "models": [
+    {
+      "id": "m365-opus:persist",
+      "name": "M365 Opus 4.6 [200k] (proxy-default)",
+      "url": "http://127.0.0.1:8000/v1/chat/completions",
+      "toolCalling": true,
+      "vision": true,
+      "maxInputTokens": 200000,
+      "maxOutputTokens": 16000
+    }
+  ]
+}
+```
+
+Then reload VS Code and pick **M365 Opus** in the Chat model dropdown.
+
+Notes:
+- `maxInputTokens + maxOutputTokens` is the number VS Code shows as the context window (200k + 16k → "216k"). Keep `maxOutputTokens` modest and put the budget on input.
+- Add more entries (e.g. `m365-gpt-think`) to switch models from the picker.
+- **Images**: attach them as a **file** (drag a `.png` in, or use the attach button) — VS Code then sends the bytes as `image_url` and the proxy uploads them to Copilot. Pasting a screenshot from the clipboard is unreliable on custom endpoints (some builds drop it); a saved file always works.
+
+#### 2. With the Claude Code extension
+
+Point Claude Code at the proxy's Anthropic-compatible endpoint. In your workspace, create `.claude/settings.local.json`:
+
+```json
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://127.0.0.1:8000",
+    "ANTHROPIC_API_KEY": "dummy"
+  }
+}
+```
+
+Claude Code then routes its requests through the proxy (using the tool-calling shim). The same env vars work from a terminal (`$env:ANTHROPIC_BASE_URL = ...; claude`).
 
 ## Persistent Sessions
 
-By default, requests are stateless from the Copilot side.
+By default (`M365_PERSIST_DEFAULT=true`), the proxy maps **each client chat to one Copilot conversation** and keeps that mapping in SQLite. Substrate retains the thread under a reused conversation id, so after the first turn the proxy stops re-sending the prior transcript.
 
-To reuse the same Copilot conversation across turns, send a stable header:
+How the mapping key is chosen, in order of precedence:
+
+1. `X-M365-Session-Id` header — an explicit, stable id you control (best when your client supports custom headers).
+2. `m365-...:persist` **plus** the OpenAI `user` field — one shared session per user.
+3. Otherwise — an automatic per-chat fingerprint (project + first real user message), so distinct chats get distinct conversations.
 
 ```http
 X-M365-Session-Id: my-work-session
 ```
 
-Or use the model suffix:
-
 ```text
-m365-copilot:persist
+m365-opus:persist
 ```
 
-Header mode is better when your client supports custom headers, because each workspace or coding-agent session can choose its own id. If your client only lets you change the model name, use `m365-copilot:persist`.
-
-If a client uses `m365-copilot:persist` without sending a `user` field, all requests share one default persistent session until the proxy restarts.
+> Clients that re-send their full history each turn (e.g. VS Code) provide no stable per-chat id, so the proxy keys on the first real user message — distinct chats stay separate, and the same chat stays together. Manage or reset mappings via the `/v1/chats` CRUD endpoints.
 
 ## Token Refresh
 
@@ -200,10 +273,28 @@ Example:
 |---|---|
 | `GET /healthz` | Service health plus token status |
 | `GET /v1/token/status` | Token validity, expiry time, and seconds remaining |
-| `GET /v1/models` | OpenAI-compatible model list |
-| `POST /v1/chat/completions` | OpenAI Chat Completions, streaming supported |
+| `GET /v1/models` | OpenAI-compatible model list (the picker variants) |
+| `POST /v1/chat/completions` | OpenAI Chat Completions, streaming + tools + vision |
 | `POST /v1/responses` | OpenAI Responses API, streaming supported |
-| `POST /v1/messages` | Anthropic Messages API style endpoint |
+| `POST /v1/messages` | Anthropic Messages API style endpoint, tools + vision |
+| `GET /v1/chats` | List tracked conversation mappings |
+| `POST /v1/chats` | Create a conversation mapping |
+| `GET /v1/chats/{key}` | Get one mapping |
+| `PATCH /v1/chats/{key}` | Update label / rotate to a fresh conversation |
+| `DELETE /v1/chats/{key}` | Forget a mapping |
+| `GET /docs`, `GET /openapi.json` | Interactive OpenAPI docs and schema |
+
+### Tool-calling shim
+
+Microsoft 365 Copilot returns plain text and has no native function calling. To let agentic clients work, the proxy injects the client's tool schemas into the prompt (with a strict sentinel-delimited output contract) and parses the model's reply back into OpenAI `tool_calls` / Anthropic `tool_use`. This is best-effort: the model may ignore the format, so the proxy verifies and asks for a correction. Send your tools as usual on `/v1/chat/completions` or `/v1/messages`.
+
+### Vision
+
+Send images the normal OpenAI way — an `image_url` content part with a `data:` base64 URI (Anthropic `image`/`source` base64 also works). The proxy uploads each image to Copilot (`UploadFile`) and references it in the prompt. VS Code's file attachments are supported (it sends them as `image_url`, or as a local `file://` reference that the proxy reads off disk). Only images in the current turn are uploaded.
+
+### Session management
+
+Each client chat maps to one Copilot conversation. The mapping key is, in order of precedence: the `X-M365-Session-Id` header, then `:persist` + the OpenAI `user` field, then an automatic per-chat fingerprint. Mappings are persisted in SQLite so chats survive a proxy restart, and can be listed / relabelled / rotated / deleted via the `/v1/chats` endpoints above.
 
 ## More Examples
 
@@ -263,9 +354,10 @@ $r.content[0].text
 
 - The proxy listens on `127.0.0.1` by default.
 - The browser token is stored locally in `.env`.
-- `.env`, `.venv/`, and Python cache files are ignored by Git.
+- `.env`, `.venv/`, Python cache files, `*.har` captures, and `debug.log` are ignored by Git. HAR captures and debug logs can contain tokens, cookies, and tenant data — never commit them.
 - The proxy does not send your token to any external service besides Microsoft 365 Copilot's own `substrate.office.com` endpoint.
 - Anyone who can read your `.env` can use the token until it expires. Treat it like a secret.
+- Temporary chats (`M365_DISABLE_MEMORY=true`, default) keep proxy traffic out of your Copilot history, but the requests still hit Microsoft's servers — this is normal Copilot use, not anonymisation.
 
 ## Environment Variables
 
@@ -274,16 +366,26 @@ Most users only need `.env` after the proxy captures a token.
 | Variable | Default | Description |
 |---|---|---|
 | `M365_ACCESS_TOKEN` | optional at startup | Browser WebSocket token. If missing, startup capture can fill `.env`. |
-| `M365_TIME_ZONE` | `Asia/Tokyo` | Optional. Time zone sent to Copilot. Usually no need to set this if `Asia/Tokyo` is correct. |
-| `M365_MODEL_ALIAS` | `m365-copilot` | Optional. Model name returned by `/v1/models`. Usually no need to change this. |
+| `M365_TIME_ZONE` | `Asia/Tokyo` | Time zone sent to Copilot. |
+| `M365_MODEL_ALIAS` | `m365-copilot` | Model name returned as the alias by `/v1/models`. |
+| `M365_WORK_GROUNDING` | `true` | `true` = Work grounding (enterprise data); `false` = Web only. Coding agents usually want `false`. |
+| `M365_PERSIST_DEFAULT` | `true` | Auto-map each client chat to one Copilot conversation. |
+| `M365_DISABLE_MEMORY` | `true` | Open every conversation as a temporary chat (`disableMemory=1`): no history, no memories. |
+| `M365_SESSION_DB` | `~/.m365-copilot-openai-proxy/sessions.db` | SQLite file for the conversation store. |
+| `M365_SESSION_SALT` | random per process | Salt for the auto conversation fingerprint. Set it to keep keys stable across restarts. |
+| `M365_RECV_TIMEOUT` | `90` | Seconds to wait for a substrate frame before giving up. |
+| `M365_OPEN_TIMEOUT` | `30` | WebSocket handshake timeout (seconds). |
+| `M365_EDGE_PATH` | Edge default path | Edge executable used for the debug token-capture window. |
+| `M365_DEBUG` | unset | When set, writes request/response diagnostics to `debug.log`. |
 
 ## Limitations
 
-- This is an unofficial local proxy over the browser-facing M365 Copilot API.
+- This is an unofficial local proxy over the browser-facing M365 Copilot API, reverse-engineered from the web client. The captured protocol (in `substrate.json`) can break without notice.
 - Token refresh depends on a signed-in Edge profile.
-- Tool calls are not supported.
+- Tool calling is a best-effort prompt shim, not native function calling — it can fail or misformat.
 - Token usage numbers are placeholders.
 - System prompts and prior conversation history are translated into plain text context.
+- Vision depends on the client sending the image bytes; some clients only send a reference or nothing.
 
 ## License
 
@@ -291,10 +393,8 @@ Apache License 2.0. See [LICENSE](LICENSE).
 
 ## Token Automation Details
 
-See [TOKEN_REFRESH.md](TOKEN_REFRESH.md) for the deeper Edge CDP refresh notes and alternatives.
+See [docs/TOKEN_REFRESH.md](docs/TOKEN_REFRESH.md) for the deeper Edge CDP refresh notes and alternatives.
 
-## Support
+## Credits
 
-If this project saves you time, please consider giving it a GitHub star. It helps other people find the repo.
-
-[![Star History Chart](https://api.star-history.com/svg?repos=kuchris/m365-copilot-openai-proxy&type=Date)](https://www.star-history.com/#kuchris/m365-copilot-openai-proxy&Date)
+This is a fork of [kuchris/m365-copilot-openai-proxy](https://github.com/kuchris/m365-copilot-openai-proxy), which provides the token capture, WebSocket bridge, and OpenAI/Anthropic-compatible output this build extends.

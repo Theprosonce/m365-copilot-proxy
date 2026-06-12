@@ -1,19 +1,57 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import os
+import re
 import time
 import uuid
 from collections.abc import AsyncIterator, Callable
+from pathlib import Path
+
+
+def _debug_dump(label: str, content: str) -> None:
+    if not os.environ.get("M365_DEBUG"):
+        return
+    try:
+        with Path("debug.log").open("a", encoding="utf-8") as f:
+            f.write(f"\n===== {label} =====\n{content}\n")
+    except Exception:
+        pass
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from .config import Settings
 from .session_store import PersistentSession, PersistentSessionStore
-from .substrate_client import SubstrateCopilotClient, SubstrateCopilotError
+from .substrate_client import MODEL_TO_TONE, SubstrateCopilotClient, SubstrateCopilotError, resolve_tone
 from .token_store import AccessTokenStore
-from .models import AnthropicMessagesRequest, OpenAIChatRequest, OpenAIResponsesRequest
-from .translator import translate_anthropic_request, translate_openai_request, translate_responses_request
+from .models import (
+    AnthropicMessagesRequest,
+    ChatCreateRequest,
+    ChatInfo,
+    ChatListResponse,
+    ChatUpdateRequest,
+    DeleteResponse,
+    ExtractedImage,
+    OpenAIChatRequest,
+    OpenAIResponsesRequest,
+)
+from .translator import (
+    extract_file_attachments,
+    extract_images,
+    flatten_content,
+    translate_anthropic_request,
+    translate_openai_request,
+    translate_responses_request,
+)
+from .tool_shim import (
+    build_correction_prompt,
+    build_tools_system_prompt,
+    has_tool_block,
+    looks_like_bypass,
+    parse_tool_calls,
+)
 
 _PERSIST_MODEL_SUFFIX = ":persist"
 _SESSION_ID_HEADER = "x-m365-session-id"
@@ -23,43 +61,106 @@ def create_app(
     settings: Settings | None = None,
     copilot_client_factory: Callable[[], SubstrateCopilotClient] | None = None,
 ) -> FastAPI:
-    app = FastAPI(title="Microsoft 365 Copilot OpenAI Proxy")
+    app = FastAPI(
+        title="Microsoft 365 Copilot OpenAI Proxy",
+        description=(
+            "OpenAI/Anthropic-compatible proxy over Microsoft 365 Copilot (substrate). "
+            "Exposes the model picker (`tone`), Work/Web grounding, a ReAct tool-calling shim, "
+            "vision (image upload), and CRUD over the persisted conversation mappings. "
+            "Interactive docs at /docs, schema at /openapi.json."
+        ),
+        version="0.2.0",
+        openapi_tags=[
+            {"name": "inference", "description": "OpenAI/Anthropic-compatible chat endpoints."},
+            {"name": "chats", "description": "CRUD over persisted conversation mappings (key -> substrate conversation)."},
+            {"name": "ops", "description": "Health and token status."},
+        ],
+    )
     resolved_settings = settings or Settings()
     app.state.settings = resolved_settings
     app.state.token_store = AccessTokenStore(resolved_settings.access_token)
-    app.state.session_store = PersistentSessionStore()
+    app.state.session_store = PersistentSessionStore(
+        db_path=resolved_settings.session_db_path
+        or str(Path.home() / ".m365-copilot-openai-proxy" / "sessions.db")
+    )
     app.state.copilot_client_factory = copilot_client_factory or (
-        lambda: SubstrateCopilotClient(app.state.token_store.get(), resolved_settings.time_zone)
+        lambda: SubstrateCopilotClient(
+            app.state.token_store.get(),
+            resolved_settings.time_zone,
+            resolved_settings.work_grounding,
+            resolved_settings.recv_timeout,
+            resolved_settings.open_timeout,
+            resolved_settings.disable_memory,
+        )
     )
 
     def get_settings() -> Settings:
         return app.state.settings
 
     def get_copilot_client() -> SubstrateCopilotClient:
-        return app.state.copilot_client_factory()
+        try:
+            return app.state.copilot_client_factory()
+        except SubstrateCopilotError as exc:
+            # e.g. token missing/expired: surface a clean 502, not an unhandled 500.
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
 
-    @app.get("/healthz")
+    @app.get("/healthz", tags=["ops"])
     async def healthz() -> dict:
         return {"status": "ok", "token": app.state.token_store.status()}
 
-    @app.get("/v1/token/status")
+    @app.get("/v1/token/status", tags=["ops"])
     async def token_status() -> dict:
         return app.state.token_store.status()
 
-    @app.get("/v1/models")
+    @app.get("/v1/models", tags=["inference"])
     async def list_models(settings: Settings = Depends(get_settings)) -> dict:
+        ids = [settings.model_alias, *MODEL_TO_TONE.keys()]
+        seen: list[str] = []
+        for mid in ids:
+            if mid not in seen:
+                seen.append(mid)
         return {
             "object": "list",
             "data": [
-                {
-                    "id": settings.model_alias,
-                    "object": "model",
-                    "owned_by": "microsoft-365-copilot",
-                }
+                {"id": mid, "object": "model", "owned_by": "microsoft-365-copilot"}
+                for mid in seen
             ],
         }
 
-    @app.post("/v1/chat/completions")
+    @app.get("/v1/chats", response_model=ChatListResponse, tags=["chats"])
+    async def list_chats() -> ChatListResponse:
+        chats = [_chat_info(key, s) for key, s in app.state.session_store.items()]
+        chats.sort(key=lambda c: c.idle_seconds)
+        return ChatListResponse(count=len(chats), chats=chats)
+
+    @app.post("/v1/chats", response_model=ChatInfo, status_code=201, tags=["chats"])
+    async def create_chat(body: ChatCreateRequest) -> ChatInfo:
+        key = body.key or f"manual:{uuid.uuid4().hex}"
+        session = app.state.session_store.create(key, label=body.label)
+        return _chat_info(key, session)
+
+    @app.get("/v1/chats/{key:path}", response_model=ChatInfo, tags=["chats"])
+    async def get_chat(key: str) -> ChatInfo:
+        session = app.state.session_store.find(key)
+        if session is None:
+            raise HTTPException(status_code=404, detail=f"No chat with key {key!r}")
+        return _chat_info(key, session)
+
+    @app.patch("/v1/chats/{key:path}", response_model=ChatInfo, tags=["chats"])
+    async def update_chat(key: str, body: ChatUpdateRequest) -> ChatInfo:
+        session = app.state.session_store.update(key, label=body.label, rotate=body.rotate)
+        if session is None:
+            raise HTTPException(status_code=404, detail=f"No chat with key {key!r}")
+        return _chat_info(key, session)
+
+    @app.delete("/v1/chats/{key:path}", response_model=DeleteResponse, tags=["chats"])
+    async def delete_chat(key: str) -> DeleteResponse:
+        deleted = app.state.session_store.delete(key)
+        if not deleted:
+            raise HTTPException(status_code=404, detail=f"No chat with key {key!r}")
+        return DeleteResponse(key=key, deleted=True)
+
+    @app.post("/v1/chat/completions", tags=["inference"])
     async def chat_completions(
         raw_request: Request,
         request: OpenAIChatRequest,
@@ -67,24 +168,64 @@ def create_app(
         client: SubstrateCopilotClient = Depends(get_copilot_client),
     ):
         try:
+            await _debug_raw(raw_request)
             translated = translate_openai_request(request)
-            session = _persistent_session(app, raw_request, request.model, request.user)
+            session = _persistent_session(app, raw_request, request.model, request.user, request.messages)
+            tone = resolve_tone(request.model)
+            images = _request_images(request.messages)
+            _debug_images(request.messages, images)
+            _debug_dump("SESSION", f"model={request.model} persist={session is not None} conv={getattr(session, 'conversation_id', None)} turn={getattr(session, 'turn_count', None)} hint={_project_hint(request.messages)!r}")
+            ctx = _trim_history(list(translated.additional_context), session)
+            prompt = translated.prompt
+            if request.tools:
+                # The client's own system prompt (e.g. OpenCode's) frames the model as a
+                # different agent and overrides our tool protocol -> drop it; our framing leads.
+                ctx = [c for c in ctx if not c.startswith("System instructions:")]
+                tool_names = [t.get("function", {}).get("name") for t in request.tools]
+                _debug_dump("REQUEST", f"tools={tool_names}\ntool_choice={request.tool_choice}\nctx={json.dumps(ctx, ensure_ascii=False)[:4000]}")
+                tools_prompt = build_tools_system_prompt(request.tools, request.tool_choice)
+                if tools_prompt:
+                    # Put the protocol IN the user turn: Copilot prioritizes the prompt
+                    # over system context and otherwise uses its own grounding.
+                    prompt = f"{tools_prompt}\n\n# Conversation / current request\n{translated.prompt}"
+                _debug_dump("FINAL PROMPT", prompt[:6000])
             if request.stream:
+                if request.tools:
+                    return StreamingResponse(
+                        _openai_tool_stream(settings.model_alias, client, prompt, ctx, session, tone, request.tools, images),
+                        media_type="text/event-stream",
+                    )
                 return StreamingResponse(
-                    _openai_stream(
-                        settings.model_alias,
-                        client,
-                        translated.prompt,
-                        translated.additional_context,
-                        session,
-                    ),
+                    _openai_stream(settings.model_alias, client, prompt, ctx, session, tone, images),
                     media_type="text/event-stream",
                 )
-            text = await client.chat(translated.prompt, translated.additional_context, session)
+            if request.tools:
+                calls, text = await _resolve_tools(client, prompt, ctx, session, tone, request.tools, images=images)
+            else:
+                calls, text = None, await client.chat(prompt, ctx, session, tone, images)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except SubstrateCopilotError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+        if calls:
+            return JSONResponse({
+                "id": f"chatcmpl_{uuid.uuid4().hex}",
+                "object": "chat.completion",
+                "created": int(time.time()),
+                "model": settings.model_alias,
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [c.model_dump() for c in calls],
+                        },
+                        "finish_reason": "tool_calls",
+                    }
+                ],
+            })
 
         return JSONResponse({
             "id": f"chatcmpl_{uuid.uuid4().hex}",
@@ -100,7 +241,7 @@ def create_app(
             ],
         })
 
-    @app.post("/v1/responses")
+    @app.post("/v1/responses", tags=["inference"])
     async def openai_responses(
         raw: Request,
         settings: Settings = Depends(get_settings),
@@ -111,17 +252,18 @@ def create_app(
             request = OpenAIResponsesRequest.model_validate(body)
             translated = translate_responses_request(request)
             session = _persistent_session(app, raw, request.model)
+            tone = resolve_tone(request.model)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         if request.stream:
             return StreamingResponse(
-                _responses_stream(settings.model_alias, client, translated.prompt, translated.additional_context, session),
+                _responses_stream(settings.model_alias, client, translated.prompt, translated.additional_context, session, tone),
                 media_type="text/event-stream",
             )
 
         try:
-            text = await client.chat(translated.prompt, translated.additional_context, session)
+            text = await client.chat(translated.prompt, translated.additional_context, session, tone)
         except SubstrateCopilotError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 
@@ -139,7 +281,7 @@ def create_app(
             "usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
         })
 
-    @app.post("/v1/messages")
+    @app.post("/v1/messages", tags=["inference"])
     async def anthropic_messages(
         raw_request: Request,
         request: AnthropicMessagesRequest,
@@ -148,20 +290,54 @@ def create_app(
     ):
         try:
             translated = translate_anthropic_request(request)
-            session = _persistent_session(app, raw_request, request.model)
+            session = _persistent_session(app, raw_request, request.model, None, request.messages)
+            tone = resolve_tone(request.model)
+            images = _request_images(request.messages)
+            _debug_images(request.messages, images)
+            ctx = _trim_history(list(translated.additional_context), session)
+            prompt = translated.prompt
+            _debug_dump("ANTHROPIC REQUEST", f"model={request.model} n_tools={len(request.tools) if request.tools else 0} tool_choice={request.tool_choice}\nuser_prompt_tail={translated.prompt[-500:]!r}")
+            if request.tools:
+                ctx = [c for c in ctx if not c.startswith("System instructions:")]
+                tools_prompt = build_tools_system_prompt(request.tools, request.tool_choice)
+                if tools_prompt:
+                    prompt = f"{tools_prompt}\n\n# Conversation / current request\n{translated.prompt}"
+
+            if request.stream:
+                if request.tools:
+                    return StreamingResponse(
+                        _anthropic_tool_stream(settings.model_alias, client, prompt, ctx, session, tone, request.tools, images),
+                        media_type="text/event-stream",
+                    )
+                return StreamingResponse(
+                    _anthropic_stream(settings.model_alias, client, prompt, ctx, session, tone, images),
+                    media_type="text/event-stream",
+                )
+
+            if request.tools:
+                calls, text = await _resolve_tools(client, prompt, ctx, session, tone, request.tools, images=images)
+            else:
+                calls, text = None, await client.chat(prompt, ctx, session, tone, images)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-        if request.stream:
-            return StreamingResponse(
-                _anthropic_stream(settings.model_alias, client, translated.prompt, translated.additional_context, session),
-                media_type="text/event-stream",
-            )
-
-        try:
-            text = await client.chat(translated.prompt, translated.additional_context, session)
         except SubstrateCopilotError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+        if calls:
+            content = [
+                {"type": "tool_use", "id": c.id, "name": c.function.name, "input": _args_obj(c.function.arguments)}
+                for c in calls
+            ]
+            return JSONResponse({
+                "id": f"msg_{uuid.uuid4().hex}",
+                "type": "message",
+                "role": "assistant",
+                "model": settings.model_alias,
+                "content": content,
+                "stop_reason": "tool_use",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 0, "output_tokens": 0},
+            })
 
         return JSONResponse({
             "id": f"msg_{uuid.uuid4().hex}",
@@ -177,18 +353,195 @@ def create_app(
     return app
 
 
+def _args_obj(arguments: str) -> dict:
+    try:
+        obj = json.loads(arguments or "{}")
+        return obj if isinstance(obj, dict) else {}
+    except json.JSONDecodeError:
+        return {}
+
+
+# Per-process salt so a conversation key is not a bare content hash (privacy / no cross-store
+# collisions). Override with M365_SESSION_SALT to make keys stable across restarts.
+_SESSION_SALT = os.environ.get("M365_SESSION_SALT") or uuid.uuid4().hex
+
+# Project/working-directory hint, so the SAME opening (e.g. /init) in DIFFERENT projects does
+# not collide into one substrate conversation. Labelled form first, then any absolute path.
+_CWD_LABEL_RE = re.compile(
+    r"(?:working directory|current working directory|cwd|project root|workspace(?: ?root| ?folder)?)"
+    r"\s*[:=]?\s*[\"'`<]?\s*([A-Za-z]:[\\/][^\s\"'`<>\n]+|/[^\s\"'`<>\n]+)",
+    re.IGNORECASE,
+)
+_ANY_PATH_RE = re.compile(r"([A-Za-z]:[\\/][^\s\"'`<>\n]{2,}|/[A-Za-z0-9._\-/]{3,})")
+
+
+def _msg_text(m) -> str:
+    content = getattr(m, "content", "")
+    if isinstance(content, list):
+        return " ".join(getattr(p, "text", "") or "" for p in content)
+    return str(content or "")
+
+
+def _project_hint(messages: list) -> str:
+    """Best-effort stable project path from the conversation (cwd in the client's system block)."""
+    blob = " ".join(_msg_text(m) for m in messages if getattr(m, "role", None) != "assistant")
+    mm = _CWD_LABEL_RE.search(blob)
+    if mm:
+        return mm.group(1).rstrip("\\/").lower()
+    mm = _ANY_PATH_RE.search(blob)
+    return mm.group(1).rstrip("\\/").lower() if mm else ""
+
+
+# VS Code injects these identical wrapper turns at the head of EVERY chat in a workspace; keying
+# on them would collapse all chats in one project into a single substrate conversation.
+_VSCODE_WRAPPERS = ("<environment_info", "<workspace_info", "<attachments")
+
+
+def _first_real_user_text(messages: list) -> str:
+    """First user turn that carries real content (skips VS Code's env/workspace wrapper turns),
+    so distinct chats in the same workspace get distinct keys."""
+    fallback = ""
+    for m in messages:
+        if getattr(m, "role", None) != "user":
+            continue
+        t = _msg_text(m).strip()
+        if not t:
+            continue
+        if not fallback:
+            fallback = t
+        if not t.startswith(_VSCODE_WRAPPERS):
+            return t
+    return fallback
+
+
+def _conversation_key(messages: list) -> str:
+    """Salted fingerprint of (project, first real user turn) — stable per chat, unique per project+chat."""
+    hint = _project_hint(messages)
+    first_user = _first_real_user_text(messages)
+    if not first_user and not hint:
+        return "default"
+    digest = hashlib.sha1(f"{_SESSION_SALT}:{hint}:{first_user}".encode("utf-8", "ignore")).hexdigest()
+    return digest[:16]
+
+
 def _persistent_session(
     app: FastAPI,
     raw_request: Request,
     model: str,
     fallback_key: str | None = None,
+    messages: list | None = None,
 ) -> PersistentSession | None:
     header_key = (raw_request.headers.get(_SESSION_ID_HEADER) or "").strip()
     if header_key:
-        return app.state.session_store.get(f"header:{header_key}")
-    if model.endswith(_PERSIST_MODEL_SUFFIX):
-        return app.state.session_store.get(f"model:{fallback_key or 'default'}")
-    return None
+        # Explicit client-supplied session id wins.
+        key = f"header:{header_key}"
+    elif model.endswith(_PERSIST_MODEL_SUFFIX) and fallback_key:
+        # `:persist` WITH an explicit user id -> one stable shared session for that user.
+        key = f"model:{fallback_key}"
+    elif messages is not None and (app.state.settings.persist_default or model.endswith(_PERSIST_MODEL_SUFFIX)):
+        # One substrate conversation per client chat, keyed by its first real user turn.
+        # (VS Code sends no per-chat id and no `user`, so this content fingerprint is what
+        # groups a chat's turns; `:persist` without a user lands here too.)
+        key = f"auto:{_conversation_key(messages)}"
+    else:
+        return None
+    session = app.state.session_store.get(key)
+    if not session.label and messages:
+        session.label = _session_label(messages)
+    app.state.session_store.persist(key, session)
+    return session
+
+
+def _session_label(messages: list) -> str:
+    hint = _project_hint(messages)
+    base = hint.rstrip("/\\").replace("\\", "/").split("/")[-1] if hint else ""
+    first = ""
+    for m in messages:
+        if getattr(m, "role", None) == "user":
+            first = _msg_text(m).strip().replace("\n", " ")[:60]
+            break
+    return (f"{base}: " if base else "") + first
+
+
+def _chat_info(key: str, s: PersistentSession) -> ChatInfo:
+    now = time.time()
+    return ChatInfo(
+        key=key,
+        conversation_id=s.conversation_id,
+        client_session_id=s.client_session_id,
+        turns=s.turn_count,
+        label=s.label,
+        created_at=int(s.created_at),
+        age_seconds=int(now - s.created_at),
+        idle_seconds=int(now - s.last_used),
+    )
+
+
+def _trim_history(ctx: list[str], session: PersistentSession | None) -> list[str]:
+    """On continued turns of a persistent session, drop the re-sent prior transcript: substrate
+    keeps the thread under the same conversation_id, so resending it just bloats the prompt and
+    buries the current message. The first turn (turn_count == 0) still seeds full context.
+    System-instruction blocks are kept (they carry the client's standing directives)."""
+    if session is None or session.turn_count == 0:
+        return ctx
+    return [c for c in ctx if not c.startswith("Prior conversation transcript:")]
+
+
+async def _debug_raw(raw_request: Request) -> None:
+    """Log inbound headers + top-level body keys, to discover any stable per-chat id the client
+    sends (which we'd otherwise drop via pydantic extra='ignore')."""
+    if not os.environ.get("M365_DEBUG"):
+        return
+    try:
+        headers = {k: v for k, v in raw_request.headers.items() if k.lower() not in ("authorization", "cookie")}
+        body = await raw_request.json()
+        # Full request straight into debug.log (headers + entire body, message/content structure
+        # intact) so we can see exactly how/whether the client encodes an image.
+        _debug_dump(
+            "RAW REQUEST (FULL)",
+            f"headers={json.dumps(headers, ensure_ascii=False)}\n"
+            f"body={json.dumps(body, ensure_ascii=False)}",
+        )
+    except Exception as exc:
+        _debug_dump("RAW REQUEST", f"(could not introspect: {exc})")
+
+
+def _debug_images(messages: list | None, images: list[ExtractedImage] | None) -> None:
+    """Log exactly what the current user turn carried and what we resolved, so we can see
+    whether VS Code sent an inline image, a file:// attachment, or an empty <attachments> tag."""
+    if not os.environ.get("M365_DEBUG"):
+        return
+    raw = ""
+    for m in reversed(messages or []):
+        if getattr(m, "role", None) == "user":
+            raw = flatten_content(getattr(m, "content", None))
+            break
+    resolved = [f"{i.file_name}({len(i.data_uri)}b)" for i in (images or [])]
+    _debug_dump("IMAGES", f"resolved={resolved}\nlast_user_content[:2000]={raw[:2000]!r}")
+
+
+def _request_images(messages: list | None) -> list[ExtractedImage] | None:
+    """Images from the CURRENT turn. VS Code splits one turn into several consecutive user
+    messages (text / image_url / text), so we scan the trailing run of user messages, not just
+    the last one — otherwise the image (in a non-last user message) is missed. History images
+    (before an assistant/tool reply) are excluded, so they are not re-uploaded.
+
+    Sources: inline `image_url`/`source` parts (VS Code, OpenAI, Anthropic) and VS Code's
+    `image:file://` attachment references resolved off the local disk."""
+    if not messages:
+        return None
+    images: list[ExtractedImage] = []
+    text_parts: list[str] = []
+    for m in reversed(messages):
+        if getattr(m, "role", None) != "user":
+            break  # reached the previous assistant/tool reply -> end of current turn
+        content = getattr(m, "content", None)
+        images = list(extract_images(content)) + images
+        text_parts.append(flatten_content(content))
+    if images:
+        return images
+    resolved = extract_file_attachments("\n".join(text_parts))
+    return resolved or None
 
 
 async def _openai_stream(
@@ -197,6 +550,8 @@ async def _openai_stream(
     prompt: str,
     additional_context: list[str],
     session: PersistentSession | None = None,
+    tone: str = "Magic",
+    images: list[ExtractedImage] | None = None,
 ) -> AsyncIterator[str]:
     completion_id = f"chatcmpl_{uuid.uuid4().hex}"
     created = int(time.time())
@@ -209,7 +564,7 @@ async def _openai_stream(
     }
     yield f"data: {json.dumps(first_chunk)}\n\n"
     try:
-        async for delta in client.chat_stream(prompt, additional_context, session):
+        async for delta in client.chat_stream(prompt, additional_context, session, tone, images):
             chunk = {
                 "id": completion_id,
                 "object": "chat.completion.chunk",
@@ -233,12 +588,102 @@ async def _openai_stream(
     yield "data: [DONE]\n\n"
 
 
+async def _resolve_tools(
+    client: SubstrateCopilotClient,
+    prompt: str,
+    additional_context: list[str],
+    session: PersistentSession | None,
+    tone: str,
+    tools: list[dict] | None,
+    max_retries: int = 3,
+    images: list[ExtractedImage] | None = None,
+) -> tuple[list | None, str]:
+    """Call Copilot, verify tool calls, and ask it to self-correct an invalid block."""
+    text = await client.chat(prompt, additional_context, session, tone, images)
+    _debug_dump("COPILOT RAW REPLY", text)
+    calls = parse_tool_calls(text, tools)
+    _debug_dump("PARSED CALLS", str(calls))
+    attempt = 0
+    while calls is None and attempt < max_retries:
+        if not text.strip():
+            retry_prompt = prompt  # transient empty reply -> retry as-is
+            label = "EMPTY-RETRY"
+        elif has_tool_block(text) or looks_like_bypass(text):
+            # invalid block, or it ducked the tools (own canvas / link / "copy it") -> correct
+            retry_prompt = build_correction_prompt(prompt, text)
+            label = "CORRECTION"
+        else:
+            break  # genuine plain-text final answer, no tool needed
+        attempt += 1
+        # Retries reuse the SAME conversation (no new substrate chat per correction). Refusals are
+        # already stripped from the resent transcript and not echoed, so this won't re-feed them.
+        text = await client.chat(retry_prompt, additional_context, session, tone)
+        _debug_dump(f"{label} {attempt} REPLY", text)
+        calls = parse_tool_calls(text, tools)
+        _debug_dump(f"{label} {attempt} PARSED", str(calls))
+    return calls, text
+
+
+async def _openai_tool_stream(
+    model_alias: str,
+    client: SubstrateCopilotClient,
+    prompt: str,
+    additional_context: list[str],
+    session: PersistentSession | None = None,
+    tone: str = "Claude_Opus",
+    tools: list[dict] | None = None,
+    images: list[ExtractedImage] | None = None,
+) -> AsyncIterator[str]:
+    completion_id = f"chatcmpl_{uuid.uuid4().hex}"
+    created = int(time.time())
+    try:
+        calls, text = await _resolve_tools(client, prompt, additional_context, session, tone, tools, images=images)
+    except SubstrateCopilotError as exc:
+        yield f"data: {json.dumps({'error': {'message': str(exc), 'type': 'upstream_error'}})}\n\n"
+        yield "data: [DONE]\n\n"
+        return
+
+    if calls:
+        tool_calls_payload = [
+            {
+                "index": i,
+                "id": c.id,
+                "type": "function",
+                "function": {"name": c.function.name, "arguments": c.function.arguments},
+            }
+            for i, c in enumerate(calls)
+        ]
+        first = {
+            "id": completion_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": model_alias,
+            "choices": [{"index": 0, "delta": {"role": "assistant", "tool_calls": tool_calls_payload}, "finish_reason": None}],
+        }
+        yield f"data: {json.dumps(first)}\n\n"
+        final = {
+            "id": completion_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": model_alias,
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}],
+        }
+        yield f"data: {json.dumps(final)}\n\n"
+        yield "data: [DONE]\n\n"
+        return
+
+    yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': created, 'model': model_alias, 'choices': [{'index': 0, 'delta': {'role': 'assistant', 'content': text}, 'finish_reason': None}]})}\n\n"
+    yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': created, 'model': model_alias, 'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'stop'}]})}\n\n"
+    yield "data: [DONE]\n\n"
+
+
 async def _responses_stream(
     model_alias: str,
     client: SubstrateCopilotClient,
     prompt: str,
     additional_context: list[str],
     session: PersistentSession | None = None,
+    tone: str = "Magic",
 ) -> AsyncIterator[str]:
     resp_id = f"resp_{uuid.uuid4().hex}"
     item_id = f"msg_{uuid.uuid4().hex}"
@@ -250,7 +695,7 @@ async def _responses_stream(
 
     full_text = ""
     try:
-        async for delta in client.chat_stream(prompt, additional_context, session):
+        async for delta in client.chat_stream(prompt, additional_context, session, tone):
             full_text += delta
             yield f"data: {json.dumps({'type': 'response.output_text.delta', 'item_id': item_id, 'output_index': 0, 'content_index': 0, 'delta': delta})}\n\n"
     except SubstrateCopilotError as exc:
@@ -267,6 +712,8 @@ async def _anthropic_stream(
     prompt: str,
     additional_context: list[str],
     session: PersistentSession | None = None,
+    tone: str = "Magic",
+    images: list[ExtractedImage] | None = None,
 ) -> AsyncIterator[str]:
     msg_id = f"msg_{uuid.uuid4().hex}"
 
@@ -278,12 +725,51 @@ async def _anthropic_stream(
     yield sse("ping", {"type": "ping"})
 
     try:
-        async for delta in client.chat_stream(prompt, additional_context, session):
+        async for delta in client.chat_stream(prompt, additional_context, session, tone, images):
             yield sse("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": delta}})
     except SubstrateCopilotError as exc:
         yield sse("error", {"type": "error", "error": {"type": "upstream_error", "message": str(exc)}})
         return
 
+    yield sse("content_block_stop", {"type": "content_block_stop", "index": 0})
+    yield sse("message_delta", {"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence": None}, "usage": {"output_tokens": 0}})
+    yield sse("message_stop", {"type": "message_stop"})
+
+
+async def _anthropic_tool_stream(
+    model_alias: str,
+    client: SubstrateCopilotClient,
+    prompt: str,
+    additional_context: list[str],
+    session: PersistentSession | None = None,
+    tone: str = "Claude_Opus",
+    tools: list[dict] | None = None,
+    images: list[ExtractedImage] | None = None,
+) -> AsyncIterator[str]:
+    msg_id = f"msg_{uuid.uuid4().hex}"
+
+    def sse(event: str, data: dict) -> str:
+        return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+    try:
+        calls, text = await _resolve_tools(client, prompt, additional_context, session, tone, tools, images=images)
+    except SubstrateCopilotError as exc:
+        yield sse("error", {"type": "error", "error": {"type": "upstream_error", "message": str(exc)}})
+        return
+
+    yield sse("message_start", {"type": "message_start", "message": {"id": msg_id, "type": "message", "role": "assistant", "content": [], "model": model_alias, "stop_reason": None, "stop_sequence": None, "usage": {"input_tokens": 0, "output_tokens": 0}}})
+
+    if calls:
+        for i, c in enumerate(calls):
+            yield sse("content_block_start", {"type": "content_block_start", "index": i, "content_block": {"type": "tool_use", "id": c.id, "name": c.function.name, "input": {}}})
+            yield sse("content_block_delta", {"type": "content_block_delta", "index": i, "delta": {"type": "input_json_delta", "partial_json": c.function.arguments or "{}"}})
+            yield sse("content_block_stop", {"type": "content_block_stop", "index": i})
+        yield sse("message_delta", {"type": "message_delta", "delta": {"stop_reason": "tool_use", "stop_sequence": None}, "usage": {"output_tokens": 0}})
+        yield sse("message_stop", {"type": "message_stop"})
+        return
+
+    yield sse("content_block_start", {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}})
+    yield sse("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}})
     yield sse("content_block_stop", {"type": "content_block_stop", "index": 0})
     yield sse("message_delta", {"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence": None}, "usage": {"output_tokens": 0}})
     yield sse("message_stop", {"type": "message_stop"})

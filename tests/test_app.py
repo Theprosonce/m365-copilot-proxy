@@ -26,7 +26,14 @@ class FakeCopilotClient:
         self.calls: list[tuple[str, list[str]]] = []
         self.sessions: list[object | None] = []
 
-    async def chat(self, prompt: str, additional_context: list[str], session: object | None = None) -> str:
+    async def chat(
+        self,
+        prompt: str,
+        additional_context: list[str],
+        session: object | None = None,
+        tone: str | None = None,
+        images: list[dict[str, str]] | None = None,
+    ) -> str:
         self.calls.append((prompt, additional_context))
         self.sessions.append(session)
         return "copilot reply"
@@ -36,6 +43,8 @@ class FakeCopilotClient:
         prompt: str,
         additional_context: list[str],
         session: object | None = None,
+        tone: str | None = None,
+        images: list[dict[str, str]] | None = None,
     ) -> AsyncIterator[str]:
         self.calls.append((prompt, additional_context))
         self.sessions.append(session)
@@ -49,6 +58,8 @@ class FailingStreamCopilotClient(FakeCopilotClient):
         prompt: str,
         additional_context: list[str],
         session: object | None = None,
+        tone: str | None = None,
+        images: list[dict[str, str]] | None = None,
     ) -> AsyncIterator[str]:
         self.calls.append((prompt, additional_context))
         self.sessions.append(session)
@@ -57,7 +68,7 @@ class FailingStreamCopilotClient(FakeCopilotClient):
 
 
 def build_client(fake: FakeCopilotClient) -> TestClient:
-    settings = Settings(M365_ACCESS_TOKEN="fake-token")
+    settings = Settings(M365_ACCESS_TOKEN="fake-token", M365_PERSIST_DEFAULT=False)
     app = create_app(settings=settings, copilot_client_factory=lambda: fake)
     return TestClient(app)
 
@@ -151,7 +162,7 @@ def test_default_client_factory_reloads_token_from_env(tmp_path, monkeypatch) ->
     seen_tokens: list[str] = []
 
     class RecordingCopilotClient(FakeCopilotClient):
-        def __init__(self, access_token: str, _time_zone: str):
+        def __init__(self, access_token: str, *_args, **_kwargs):
             super().__init__()
             seen_tokens.append(access_token)
 

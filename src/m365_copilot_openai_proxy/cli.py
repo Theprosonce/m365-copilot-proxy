@@ -5,8 +5,10 @@ import asyncio
 import json
 import logging
 import msvcrt
+import os
 import re
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -112,6 +114,10 @@ async def _cdp_capture_websocket_token(port: int, timeout_seconds: int) -> str |
         try:
             async with websockets.connect(tab["webSocketDebuggerUrl"]) as ws:
                 await ws.send(json.dumps({"id": 1, "method": "Network.enable"}))
+                # Reload the page so the app deterministically opens a fresh authenticated
+                # websocket (an idle tab won't create one on its own).
+                await ws.send(json.dumps({"id": 2, "method": "Page.enable"}))
+                await ws.send(json.dumps({"id": 3, "method": "Page.reload", "params": {"ignoreCache": False}}))
                 token = await _wait_for_substrate_websocket_token(ws, deadline)
                 if token:
                     return token
@@ -253,8 +259,114 @@ def _is_substrate_token(token: str) -> bool:
     return is_substrate_token_claims(claims)
 
 
+_SUBSTRATE_SCOPE = "https://substrate.office.com/sydney/.default"
+
+_MSAL_READ_JS = r"""
+(() => {
+  let rt = null, sub = null;
+  for (const k of Object.keys(localStorage)) {
+    const v = localStorage.getItem(k) || "";
+    if (k.includes("refreshtoken")) { try { const o = JSON.parse(v); if (o && o.secret) rt = o; } catch (e) {} }
+    if (k.includes("accesstoken") && k.includes("substrate.office.com/sydney")) { try { sub = JSON.parse(v); } catch (e) {} }
+  }
+  return { rt, sub };
+})()
+"""
+
+
+async def _read_msal_via_cdp(port: int) -> dict | None:
+    try:
+        async with httpx.AsyncClient(timeout=2) as client:
+            tabs = (await client.get(f"http://localhost:{port}/json")).json()
+    except Exception:
+        return None
+    tab = _find_m365_page(tabs)
+    if not tab:
+        return None
+    try:
+        async with websockets.connect(tab["webSocketDebuggerUrl"], max_size=None) as ws:
+            await ws.send(json.dumps({"id": 1, "method": "Runtime.evaluate",
+                                      "params": {"expression": _MSAL_READ_JS, "returnByValue": True}}))
+            while True:
+                r = json.loads(await ws.recv())
+                if r.get("id") == 1:
+                    return r.get("result", {}).get("result", {}).get("value")
+    except Exception:
+        return None
+
+
+def _mint_substrate(refresh_token: str, tenant: str, client_id: str) -> tuple[str, str] | None:
+    """Exchange a (FOCI) refresh token for a fresh substrate/sydney access token. Returns (access, new_refresh)."""
+    body = {
+        "grant_type": "refresh_token",
+        "refresh_token": refresh_token,
+        "client_id": client_id,
+        "scope": _SUBSTRATE_SCOPE,
+    }
+    try:
+        resp = httpx.post(
+            f"https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token",
+            data=body,
+            headers={"Origin": "https://m365.cloud.microsoft"},
+            timeout=20,
+        )
+        j = resp.json()
+    except Exception as exc:
+        print(f"Mint failed: {exc}")
+        return None
+    access = j.get("access_token")
+    if not access:
+        print(f"Mint rejected: {j.get('error')} - {str(j.get('error_description', ''))[:160]}")
+        return None
+    return access, j.get("refresh_token") or refresh_token
+
+
+def _foci_refresh_from_env() -> bool:
+    rt = _read_env_value("M365_REFRESH_TOKEN")
+    tenant = _read_env_value("M365_TENANT_ID")
+    client_id = _read_env_value("M365_CLIENT_ID")
+    if not (rt and tenant and client_id):
+        return False
+    minted = _mint_substrate(rt, tenant, client_id)
+    if not minted:
+        return False
+    access, new_rt = minted
+    _write_token(access)
+    if new_rt and new_rt != rt:
+        _write_env_value("M365_REFRESH_TOKEN", new_rt)  # rotate
+    return True
+
+
+def _capture_refresh_token_via_cdp(cdp_port: int) -> bool:
+    data = asyncio.run(_read_msal_via_cdp(cdp_port))
+    if not data or not data.get("rt"):
+        return False
+    rt = data["rt"].get("secret")
+    sub = data.get("sub") or {}
+    client_id = sub.get("clientId") or data["rt"].get("clientId")
+    tenant = sub.get("realm") or data["rt"].get("realm")
+    if not (rt and client_id and tenant):
+        return False
+    _write_env_value("M365_REFRESH_TOKEN", rt)
+    _write_env_value("M365_TENANT_ID", tenant)
+    _write_env_value("M365_CLIENT_ID", client_id)
+    print("Captured MSAL refresh token; minting substrate token via HTTP (no browser needed from now on).")
+    return _foci_refresh_from_env()
+
+
 def _try_auto_refresh(cdp_port: int, *, allow_nudge: bool = True) -> bool:
+    # 1. Pure-HTTP mint from a stored refresh token (no browser required).
+    if _foci_refresh_from_env():
+        print("Token refreshed via refresh-token (HTTP).")
+        return True
+    # 2. Read the refresh token from the signed-in Edge once, then mint.
+    if _capture_refresh_token_via_cdp(cdp_port):
+        print("Token refreshed via refresh-token (HTTP).")
+        return True
+    # 3. Legacy browser capture (localStorage access token / websocket).
     token = asyncio.run(_cdp_extract_token(cdp_port, allow_nudge=allow_nudge))
+    if not token:
+        token = asyncio.run(_cdp_capture_websocket_token(cdp_port, 25))
     if not token:
         return False
     _write_token(token)
@@ -307,17 +419,29 @@ def _auto_refresh_loop(
 
 
 def _write_token(token: str) -> None:
+    _write_env_value("M365_ACCESS_TOKEN", token)
+
+
+def _write_env_value(key: str, value: str) -> None:
     env_path = Path(".env")
-    token_line_pattern = r"(?m)^M365_ACCESS_TOKEN=.*$"
+    pattern = rf"(?m)^{re.escape(key)}=.*$"
     if env_path.exists():
         text = env_path.read_text(encoding="utf-8")
-        if re.search(token_line_pattern, text):
-            text = re.sub(token_line_pattern, f"M365_ACCESS_TOKEN={token}", text)
+        if re.search(pattern, text):
+            text = re.sub(pattern, f"{key}={value}", text)
         else:
-            text += f"\nM365_ACCESS_TOKEN={token}\n"
+            text += ("" if text.endswith("\n") or not text else "\n") + f"{key}={value}\n"
     else:
-        text = f"M365_ACCESS_TOKEN={token}\n"
+        text = f"{key}={value}\n"
     env_path.write_text(text, encoding="utf-8")
+
+
+def _read_env_value(key: str) -> str | None:
+    env_path = Path(".env")
+    if not env_path.exists():
+        return None
+    match = re.search(rf"(?m)^{re.escape(key)}=(.*)$", env_path.read_text(encoding="utf-8"))
+    return match.group(1).strip().strip("\"'") if match else None
 
 
 def main() -> None:
@@ -342,7 +466,11 @@ def main() -> None:
     serve_parser.add_argument("--no-launch-edge", action="store_true")
     serve_parser.add_argument("--no-capture-on-start", action="store_true")
     serve_parser.add_argument("--capture-timeout-seconds", type=int, default=180)
-    serve_parser.add_argument("--refresh-before-seconds", type=int, default=300)
+    # Refresh well before expiry for safety (env M365_REFRESH_BEFORE, default 15 min).
+    serve_parser.add_argument(
+        "--refresh-before-seconds", type=int,
+        default=int(os.environ.get("M365_REFRESH_BEFORE", "900")),
+    )
     serve_parser.add_argument("--refresh-retry-seconds", type=int, default=60)
     serve_parser.set_defaults(func=serve_command)
 
@@ -354,16 +482,30 @@ def launch_edge_command(args: argparse.Namespace) -> None:
     _launch_debug_edge(args.cdp_port)
 
 
+_DEFAULT_EDGE_PATH = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
+
+
 def _launch_debug_edge(cdp_port: int) -> None:
     profile_dir = Path.home() / ".m365-copilot-openai-proxy" / "edge-profile"
     profile_dir.mkdir(parents=True, exist_ok=True)
-    subprocess.Popen([
-        r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+    edge_path = _read_env_value("M365_EDGE_PATH") or _DEFAULT_EDGE_PATH
+    argv = [
+        edge_path,
         f"--remote-debugging-port={cdp_port}",
         f"--user-data-dir={profile_dir}",
         "--no-first-run",
-        "https://m365.cloud.microsoft/chat",
-    ])
+    ]
+    if (os.environ.get("M365_EDGE_HEADLESS") or "").strip().lower() in ("1", "true", "yes", "on"):
+        # Invisible refresh — works only if the profile is already signed in and the tenant
+        # does not require interactive WAM re-auth. First sign-in must be done non-headless.
+        argv += ["--headless=new", "--disable-gpu"]
+    argv.append("https://m365.cloud.microsoft/chat")
+    # Detach from this process's job object so Edge survives when the launcher (uv run) exits
+    # or when `serve` is restarted — otherwise the job teardown kills the browser.
+    flags = 0
+    if os.name == "nt":
+        flags = 0x00000008 | 0x01000000 | 0x00000200  # DETACHED_PROCESS | BREAKAWAY_FROM_JOB | NEW_PROCESS_GROUP
+    subprocess.Popen(argv, creationflags=flags, close_fds=True)
     print(f"Edge launched with remote debugging on port {cdp_port}.")
     print(f"Dedicated Edge profile: {profile_dir}")
     print("Sign in to M365 Copilot in that window once, then retry refresh.")
@@ -442,17 +584,25 @@ def serve_command(args: argparse.Namespace) -> None:
         )
 
         action = None
+        # The [q]/[r] keyboard loop needs an interactive console. When launched without one
+        # (redirected stdin, background, .bat with start /min), just run the server; the
+        # auto-refresh thread keeps the token fresh regardless.
+        kb_ok = bool(getattr(sys.stdin, "isatty", lambda: False)())
         while thread.is_alive():
-            if msvcrt.kbhit():
-                key = msvcrt.getwch().lower()
-                if key == "q":
-                    action = "quit"
-                    server.should_exit = True
-                    break
-                elif key == "r":
-                    action = "refresh"
-                    server.should_exit = True
-                    break
+            if kb_ok:
+                try:
+                    if msvcrt.kbhit():
+                        key = msvcrt.getwch().lower()
+                        if key == "q":
+                            action = "quit"
+                            server.should_exit = True
+                            break
+                        elif key == "r":
+                            action = "refresh"
+                            server.should_exit = True
+                            break
+                except OSError:
+                    kb_ok = False
             time.sleep(0.05)
 
         stop_auto_refresh.set()

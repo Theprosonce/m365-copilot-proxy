@@ -2,3 +2,17 @@
 .venv/
 __pycache__/
 *.py[cod]
+
+# Reverse-engineering captures — contain access tokens, cookies, tenant data. Keep local only.
+# (docs/ itself is committed for documentation; only the HAR captures are excluded.)
+*.har
+
+# Local debug / runtime output
+debug.log
+last_request.json
+*.db
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
