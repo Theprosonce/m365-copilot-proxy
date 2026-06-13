@@ -8,7 +8,9 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $root
 
-$version = "0.3.0"
+# Single source of truth: read the version from the package (__version__).
+$version = (& "$root\.venv\Scripts\python.exe" -c "import m365_copilot_openai_proxy as m; print(m.__version__)").Trim()
+if (-not $version) { throw "Could not read __version__ from m365_copilot_openai_proxy" }
 $out     = Join-Path $root "dist-nuitka"
 $distDir = Join-Path $out "build_entry.dist"
 $exe     = Join-Path $distDir "m365-copilot-proxy.exe"
@@ -61,7 +63,7 @@ Write-Host "  signed main exe: $($sig.Status)"
 
 Write-Host "[3/4] Building installer with Inno Setup..." -ForegroundColor Cyan
 New-Item -ItemType Directory -Force -Path $instOut | Out-Null
-& "$iscc" "/DPayloadDir=$distDir" "installer.iss"
+& "$iscc" "/DAppVersion=$version" "/DPayloadDir=$distDir" "installer.iss"
 if (-not (Test-Path $setup)) { throw "Inno build failed: $setup not found" }
 
 Write-Host "[4/4] Signing the installer..." -ForegroundColor Cyan

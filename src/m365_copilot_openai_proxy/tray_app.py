@@ -25,7 +25,7 @@ from pathlib import Path
 
 import httpx
 
-APP_VERSION = "0.3.0"
+from m365_copilot_openai_proxy import __version__ as APP_VERSION
 REPO = "MassimilianoPili/m365-copilot-proxy"
 
 # Palette

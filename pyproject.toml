@@ -1,6 +1,6 @@
 [project]
 name = "m365-copilot-openai-proxy"
-version = "0.3.0"
+dynamic = ["version"]
 description = "OpenAI-compatible shim for Microsoft 365 Copilot Chat"
 license = "Apache-2.0"
 requires-python = ">=3.11"
@@ -27,6 +27,10 @@ copilot-openai-proxy = "m365_copilot_openai_proxy.cli:main"
 [build-system]
 requires = ["hatchling>=1.27.0"]
 build-backend = "hatchling.build"
+
+# Single source of truth: version is read from m365_copilot_openai_proxy.__version__.
+[tool.hatch.version]
+path = "src/m365_copilot_openai_proxy/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/m365_copilot_openai_proxy"]
