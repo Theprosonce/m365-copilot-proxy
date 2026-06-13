@@ -9,10 +9,12 @@ from fastapi.testclient import TestClient
 
 from m365_copilot_openai_proxy.app import create_app
 from m365_copilot_openai_proxy.cli import (
+    _debug_browser_profile_dir,
     _find_m365_page,
     _is_substrate_token,
     _needs_substrate_token,
     _read_token,
+    _resolve_debug_browser_path,
     _seconds_remaining,
     _write_token,
 )
@@ -282,6 +284,38 @@ def test_cli_finds_real_m365_page_not_devtools() -> None:
     ]
 
     assert _find_m365_page(tabs) == tabs[1]
+
+
+def test_cli_linux_browser_priority_prefers_chromium(monkeypatch) -> None:
+    monkeypatch.setattr("m365_copilot_openai_proxy.cli._read_env_value", lambda _key: None)
+    monkeypatch.setattr("m365_copilot_openai_proxy.cli.os.name", "posix")
+    monkeypatch.setattr("m365_copilot_openai_proxy.cli.sys.platform", "linux")
+
+    installed = {
+        "chromium": "/usr/bin/chromium",
+        "chromium-browser": "/usr/bin/chromium-browser",
+        "google-chrome": "/usr/bin/google-chrome",
+        "microsoft-edge": "/usr/bin/microsoft-edge",
+    }
+    monkeypatch.setattr("m365_copilot_openai_proxy.cli.shutil.which", lambda name: installed.get(name))
+
+    assert _resolve_debug_browser_path() == "/usr/bin/chromium"
+
+
+def test_cli_debug_browser_path_keeps_windows_default(monkeypatch) -> None:
+    monkeypatch.setattr("m365_copilot_openai_proxy.cli._read_env_value", lambda _key: None)
+    monkeypatch.setattr("m365_copilot_openai_proxy.cli.os.name", "nt")
+
+    assert _resolve_debug_browser_path() == r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
+
+
+def test_cli_linux_snap_profile_dir_uses_non_hidden_home(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr("m365_copilot_openai_proxy.cli.sys.platform", "linux")
+    monkeypatch.setattr("m365_copilot_openai_proxy.cli.Path.home", lambda: tmp_path)
+
+    profile_dir = _debug_browser_profile_dir("/snap/bin/chromium")
+
+    assert profile_dir == tmp_path / "m365-copilot-openai-proxy-browser-profile"
 
 
 def test_openai_chat_completion_translates_history() -> None:

@@ -4,14 +4,19 @@ import argparse
 import asyncio
 import json
 import logging
-import msvcrt
 import os
 import re
+import shutil
 import subprocess
 import sys
 import threading
 import time
 from pathlib import Path
+
+try:
+    import msvcrt
+except ImportError:  # pragma: no cover - Windows-only module.
+    msvcrt = None
 
 import httpx
 import uvicorn
@@ -516,12 +521,33 @@ def launch_edge_command(args: argparse.Namespace) -> None:
 
 
 _DEFAULT_EDGE_PATH = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
+_LINUX_BROWSER_PRIORITY = ("chromium", "chromium-browser", "google-chrome", "microsoft-edge")
+
+
+def _resolve_debug_browser_path() -> str:
+    configured = _read_env_value("M365_EDGE_PATH")
+    if configured:
+        return configured
+    if os.name == "nt":
+        return _DEFAULT_EDGE_PATH
+    if sys.platform.startswith("linux"):
+        for candidate in _LINUX_BROWSER_PRIORITY:
+            resolved = shutil.which(candidate)
+            if resolved:
+                return resolved
+    return _DEFAULT_EDGE_PATH
+
+
+def _debug_browser_profile_dir(browser_path: str) -> Path:
+    if sys.platform.startswith("linux") and browser_path.startswith("/snap/bin/"):
+        return Path.home() / "m365-copilot-openai-proxy-browser-profile"
+    return Path.home() / ".m365-copilot-openai-proxy" / "edge-profile"
 
 
 def _launch_debug_edge(cdp_port: int) -> None:
-    profile_dir = Path.home() / ".m365-copilot-openai-proxy" / "edge-profile"
+    edge_path = _resolve_debug_browser_path()
+    profile_dir = _debug_browser_profile_dir(edge_path)
     profile_dir.mkdir(parents=True, exist_ok=True)
-    edge_path = _read_env_value("M365_EDGE_PATH") or _DEFAULT_EDGE_PATH
     argv = [
         edge_path,
         f"--remote-debugging-port={cdp_port}",
@@ -754,7 +780,7 @@ def _run_server(args: argparse.Namespace) -> None:
         kb_ok = bool(getattr(sys.stdin, "isatty", lambda: False)())
         try:
             while thread.is_alive():
-                if kb_ok:
+                if kb_ok and msvcrt is not None:
                     try:
                         if msvcrt.kbhit():
                             key = msvcrt.getwch().lower()
