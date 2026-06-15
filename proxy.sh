@@ -55,12 +55,38 @@ if [ ! -d .venv ] || [ "$REINSTALL" = "1" ]; then
 fi
 
 # 3b. start headless in background; logs to proxy.log next to the script
-echo "[M365 Proxy] starting from source (background)..."
+echo "[M365 Proxy] starting from source (background, log: proxy.log)..."
+: > proxy.log  # truncate previous run so the dump-on-fail only shows current attempt
 M365_TIME_ZONE="Europe/Rome" \
 M365_WORK_GROUNDING="false" \
 M365_DEBUG="1" \
 nohup ./.venv/bin/python -m m365_copilot_openai_proxy serve > proxy.log 2>&1 &
 BG_PID=$!
 disown "$BG_PID" 2>/dev/null || true
-sleep 1
-echo "[M365 Proxy] started (pid $BG_PID). http://127.0.0.1:$PORT  (logs: proxy.log)"
+
+# Probe /healthz (max ~30s) — netstat/lsof alone is insufficient: uvicorn can bind :PORT but stay
+# deadlocked, so a TCP-open check would falsely report "started". HTTP 200 = app actually serving.
+ready=0
+deadline=$(( $(date +%s) + 30 ))
+while [ "$(date +%s)" -lt "$deadline" ]; do
+    if ! kill -0 "$BG_PID" 2>/dev/null; then break; fi
+    if curl -fsS --max-time 1 "http://127.0.0.1:$PORT/healthz" >/dev/null 2>&1; then
+        ready=1; break
+    fi
+    sleep 0.5
+done
+
+if [ "$ready" = "1" ]; then
+    echo "[M365 Proxy] started (pid $BG_PID). http://127.0.0.1:$PORT  (logs: proxy.log)"
+    exit 0
+fi
+
+echo "[M365 Proxy] FAILED — /healthz did not respond within 30s." >&2
+if ! kill -0 "$BG_PID" 2>/dev/null; then
+    echo "  process pid $BG_PID exited" >&2
+else
+    echo "  process pid $BG_PID still running but no listener; leaving it for inspection" >&2
+fi
+echo "----- tail proxy.log -----" >&2
+tail -n 20 proxy.log >&2 2>/dev/null || true
+exit 1

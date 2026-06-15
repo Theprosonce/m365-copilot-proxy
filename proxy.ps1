@@ -8,7 +8,7 @@
 #   1. ensure .venv exists (needed by PyInstaller in build-exe.ps1)
 #   2. ensure dist\m365-copilot-proxy.exe exists (locally built -> no Mark-of-the-Web ->
 #      no SmartScreen warning, unlike the binary downloaded from GitHub releases)
-#   3. start that exe headless (`serve`) — windowless, listening on :8000
+#   3. start that exe headless (`serve`) - windowless, listening on :8000
 #
 # What it does (when running):
 #   detects listener on :8000 and stops every m365-copilot-openai-proxy process
@@ -70,10 +70,58 @@ if ((-not (Test-Path $exe)) -or $ForceBuild) {
     if (-not (Test-Path $exe)) { throw "build failed: $exeRel not found" }
 }
 
-# 3c. start the locally-built signed exe headless, windowless (no MotW -> no SmartScreen prompt)
-Write-Host "[M365 Proxy] starting $exeRel serve ..." -ForegroundColor Cyan
-$env:M365_TIME_ZONE     = "Europe/Rome"
+# 3c. start the locally-built signed exe headless, windowless (no MotW -> no SmartScreen prompt).
+# The exe is --windowed (no console subsystem). Without -RedirectStandardOutput/Error any startup
+# crash dies silently and we can't tell whether `serve` is actually listening. So we capture both
+# streams to proxy.log / proxy.err.log and *poll netstat* until the listener binds (or time out).
+$logOut = Join-Path $PSScriptRoot "proxy.log"
+$logErr = Join-Path $PSScriptRoot "proxy.err.log"
+# truncate previous run so the dump-on-fail only shows current attempt
+"" | Set-Content -Path $logOut -Encoding utf8
+"" | Set-Content -Path $logErr -Encoding utf8
+
+Write-Host "[M365 Proxy] starting $exeRel serve (logs: proxy.log, proxy.err.log) ..." -ForegroundColor Cyan
+$env:M365_TIME_ZONE      = "Europe/Rome"
 $env:M365_WORK_GROUNDING = "false"
 $env:M365_DEBUG          = "1"
-Start-Process -FilePath $exe -ArgumentList "serve" -WorkingDirectory $PSScriptRoot
-Write-Host "[M365 Proxy] started. http://127.0.0.1:$port" -ForegroundColor Green
+$proc = Start-Process -FilePath $exe -ArgumentList "serve" `
+    -WorkingDirectory $PSScriptRoot `
+    -RedirectStandardOutput $logOut -RedirectStandardError $logErr `
+    -PassThru
+
+# Probe /healthz with a short timeout (max ~30s total). netstat alone is insufficient: uvicorn can
+# bind :PORT but stay deadlocked, so a TCP-open check would falsely report "started". An HTTP 200
+# from /healthz is the authoritative "FastAPI app is actually serving" signal.
+$ready = $false
+$timeoutSec = 30
+$deadline = (Get-Date).AddSeconds($timeoutSec)
+while ((Get-Date) -lt $deadline) {
+    if ($proc.HasExited) { break }
+    try {
+        $resp = Invoke-WebRequest -Uri "http://127.0.0.1:$port/healthz" -TimeoutSec 1 -UseBasicParsing -ErrorAction Stop
+        if ($resp.StatusCode -eq 200) { $ready = $true; break }
+    } catch {
+        # not up yet -> keep polling
+    }
+    Start-Sleep -Milliseconds 500
+}
+
+if ($ready) {
+    Write-Host "[M365 Proxy] started (pid $($proc.Id)). http://127.0.0.1:$port" -ForegroundColor Green
+    exit 0
+}
+
+# Fail path: dump the tail of both logs so the user sees the actual error.
+Write-Host "[M365 Proxy] FAILED - /healthz did not respond within ${timeoutSec}s." -ForegroundColor Red
+if ($proc.HasExited) {
+    Write-Host "  process pid $($proc.Id) exited with code $($proc.ExitCode)" -ForegroundColor Red
+} else {
+    Write-Host "  process pid $($proc.Id) still running but no listener; leaving it for inspection" -ForegroundColor Red
+}
+foreach ($f in @($logOut, $logErr)) {
+    if ((Test-Path $f) -and ((Get-Item $f).Length -gt 0)) {
+        Write-Host "----- tail $((Split-Path $f -Leaf)) -----" -ForegroundColor Yellow
+        Get-Content -Path $f -Tail 20 | ForEach-Object { Write-Host "  $_" }
+    }
+}
+exit 1
