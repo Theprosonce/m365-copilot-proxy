@@ -135,11 +135,20 @@ The model name selects the underlying Copilot model (substrate `tone`). `GET /v1
 
 Append `:persist` to any id (e.g. `m365-opus:persist`) to reuse one Copilot conversation per chat.
 
-### OpenCode
+### **OpenCode**
 
+#### Option A: Temporary
+Windows:
 ```powershell
 $env:OPENAI_BASE_URL = "http://127.0.0.1:8000"
 $env:OPENAI_API_KEY = "dummy"
+opencode
+```
+
+Linux:
+```bash
+export OPENAI_BASE_URL="http://127.0.0.1:8000"
+export OPENAI_API_KEY="dummy"
 opencode
 ```
 
@@ -149,11 +158,39 @@ Select **OpenAI API** as the provider, then use:
 m365-copilot
 ```
 
-For persistent Copilot-side conversation memory:
+#### Option B: Permanent
 
-```text
-m365-copilot:persist
+
+Windows Setup:
+
+- **Add/update** the provider:
+  ```cmd
+  setup\opencode.bat
+  ```
+  or
+  ```powershell
+  .\setup\opencode.ps1
+  ```
+
+- **Remove** the provider:
+  ```cmd
+  setup\opencode.bat --remove
+  ```
+  or
+  ```powershell
+  .\setup\opencode.ps1 --remove
+  ```
+
+Config location: `%USERPROFILE%\.config\opencode\opencode.json`
+
+Linux Setup:
+```bash
+chmod +x setup/opencode.sh
+./setup/opencode.sh
+opencode
 ```
+
+__Note: Use :persist suffix to enable persistent sessions__
 
 ### Continue
 
