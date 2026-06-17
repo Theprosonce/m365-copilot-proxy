@@ -9,6 +9,7 @@ Update is opt-in: on launch it reads the release update.json manifest and, if ne
 On accept, an installed build downloads the signed Inno installer and runs it silently (in-place
 upgrade); a portable single-file swaps itself on restart — the manifest names both URLs explicitly.
 """
+
 from __future__ import annotations
 
 import json
@@ -26,6 +27,7 @@ from pathlib import Path
 import httpx
 
 from m365_copilot_openai_proxy import __version__ as APP_VERSION
+
 REPO = "MassimilianoPili/m365-copilot-proxy"
 
 # Palette
@@ -42,17 +44,17 @@ TEXT = "#ECECEE"
 _GUI_SETTINGS = Path.home() / ".m365-copilot-openai-proxy" / "gui-settings.json"
 _DEFAULT_SETTINGS = {
     "port": 8000,
-    "work_grounding": False,     # web grounding (better for coding agents)
-    "temporary_chat": True,      # disableMemory=1 (no history/memories)
-    "configure_clients": True,   # wire Claude Code + VS Code while running
-    "launch_edge": True,         # open the debug Edge window for token capture/refresh
+    "work_grounding": False,  # web grounding (better for coding agents)
+    "temporary_chat": True,  # disableMemory=1 (no history/memories)
+    "configure_clients": True,  # wire Claude Code + VS Code while running
+    "launch_edge": True,  # open the debug Edge window for token capture/refresh
     "auto_refresh": True,
-    "auto_connect": False,       # do NOT connect automatically on launch (user connects explicitly)
-    "persist_default": True,     # reuse one substrate conversation per client chat
-    "ws_reuse": False,           # keep one WebSocket alive per session (experimental)
+    "auto_connect": False,  # do NOT connect automatically on launch (user connects explicitly)
+    "persist_default": True,  # reuse one substrate conversation per client chat
+    "ws_reuse": False,  # keep one WebSocket alive per session (experimental)
     "passthrough_claude": True,  # forward non-m365 models straight to the real Anthropic API
-    "anthropic_key": "",         # optional API-key override for passthrough (empty -> OAuth file)
-    "hide_on_token_success": True, # automatically close/hide debug browser on token capture
+    "anthropic_key": "",  # optional API-key override for passthrough (empty -> OAuth file)
+    "hide_on_token_success": True,  # automatically close/hide debug browser on token capture
 }
 
 
@@ -75,7 +77,10 @@ def _hide_console() -> None:
 
 def load_settings() -> dict:
     try:
-        return {**_DEFAULT_SETTINGS, **json.loads(_GUI_SETTINGS.read_text(encoding="utf-8"))}
+        return {
+            **_DEFAULT_SETTINGS,
+            **json.loads(_GUI_SETTINGS.read_text(encoding="utf-8")),
+        }
     except Exception:
         return dict(_DEFAULT_SETTINGS)
 
@@ -96,11 +101,14 @@ def _tray_image(connected: bool):
     draw = ImageDraw.Draw(base)
     r = 24
     color = (46, 204, 113, 255) if connected else (231, 76, 60, 255)
-    draw.ellipse([64 - r, 64 - r, 63, 63], fill=color, outline=(22, 22, 26, 255), width=3)
+    draw.ellipse(
+        [64 - r, 64 - r, 63, 63], fill=color, outline=(22, 22, 26, 255), width=3
+    )
     return base
 
 
 # --- proxy lifecycle ---------------------------------------------------------------------------
+
 
 class ProxyController:
     def __init__(self, settings: dict):
@@ -140,24 +148,42 @@ class ProxyController:
             )
 
             s = self.settings
-            os.environ["M365_WORK_GROUNDING"] = "true" if s.get("work_grounding") else "false"
-            os.environ["M365_DISABLE_MEMORY"] = "true" if s.get("temporary_chat", True) else "false"
-            os.environ["M365_PERSIST_DEFAULT"] = "true" if s.get("persist_default", True) else "false"
-            os.environ["M365_WS_REUSE"] = "true" if s.get("ws_reuse", False) else "false"
-            os.environ["M365_ANTHROPIC_PASSTHROUGH"] = "true" if s.get("passthrough_claude", False) else "false"
-            os.environ["M365_HIDE_ON_TOKEN_SUCCESS"] = "true" if s.get("hide_on_token_success", True) else "false"
+            os.environ["M365_WORK_GROUNDING"] = (
+                "true" if s.get("work_grounding") else "false"
+            )
+            os.environ["M365_DISABLE_MEMORY"] = (
+                "true" if s.get("temporary_chat", True) else "false"
+            )
+            os.environ["M365_PERSIST_DEFAULT"] = (
+                "true" if s.get("persist_default", True) else "false"
+            )
+            os.environ["M365_WS_REUSE"] = (
+                "true" if s.get("ws_reuse", False) else "false"
+            )
+            os.environ["M365_ANTHROPIC_PASSTHROUGH"] = (
+                "true" if s.get("passthrough_claude", False) else "false"
+            )
+            os.environ["M365_HIDE_ON_TOKEN_SUCCESS"] = (
+                "true" if s.get("hide_on_token_success", True) else "false"
+            )
             override_key = (s.get("anthropic_key") or "").strip()
             if override_key:
                 os.environ["M365_ANTHROPIC_KEY"] = override_key
             else:
-                os.environ.pop("M365_ANTHROPIC_KEY", None)  # empty -> use the Claude Code OAuth file
+                os.environ.pop(
+                    "M365_ANTHROPIC_KEY", None
+                )  # empty -> use the Claude Code OAuth file
             self.port = int(s.get("port", 8000))
 
             print(f"Starting proxy on {self.base_url} ...")
             self._server = uvicorn.Server(
                 uvicorn.Config(
-                    create_app(), host=self.host, port=self.port,
-                    log_level="info", access_log=False, log_config=None,  # use root logger -> Logs tab
+                    create_app(),
+                    host=self.host,
+                    port=self.port,
+                    log_level="info",
+                    access_log=False,
+                    log_config=None,  # use root logger -> Logs tab
                 )
             )
             self._thread = threading.Thread(target=self._server.run, daemon=True)
@@ -167,17 +193,23 @@ class ProxyController:
                     break
                 time.sleep(0.05)
             needs_token = _needs_substrate_token(_read_token())
-            if s.get("launch_edge", True) and (needs_token or s.get("auto_refresh", True)):
+            if s.get("launch_edge", True) and (
+                needs_token or s.get("auto_refresh", True)
+            ):
                 try:
                     _launch_debug_edge(self.cdp_port)
                 except Exception as exc:
                     print(f"  ! could not launch Edge: {exc}")
             if needs_token:
-                threading.Thread(target=_startup_capture_loop, args=(self.cdp_port, 180), daemon=True).start()
+                threading.Thread(
+                    target=_startup_capture_loop, args=(self.cdp_port, 180), daemon=True
+                ).start()
             if s.get("auto_refresh", True):
                 self._stop_refresh = threading.Event()
                 threading.Thread(
-                    target=_auto_refresh_loop, args=(self.cdp_port, 900, 60, self._stop_refresh), daemon=True
+                    target=_auto_refresh_loop,
+                    args=(self.cdp_port, 900, 60, self._stop_refresh),
+                    daemon=True,
                 ).start()
             if s.get("configure_clients", True):
                 _configure_clients(undo=False, base_url=self.base_url)
@@ -219,6 +251,7 @@ class ProxyController:
 
 # --- update ------------------------------------------------------------------------------------
 
+
 def _version_tuple(s: str) -> tuple[int, ...]:
     return tuple(int(x) for x in re.findall(r"\d+", s)[:3])
 
@@ -235,7 +268,9 @@ def _is_installed() -> bool:
     if not base or exe is None:
         return False
     try:
-        return exe.resolve().is_relative_to((Path(base) / "Programs" / "M365CopilotProxy").resolve())
+        return exe.resolve().is_relative_to(
+            (Path(base) / "Programs" / "M365CopilotProxy").resolve()
+        )
     except Exception:
         return False
 
@@ -283,10 +318,13 @@ def apply_update(asset_url: str) -> bool:
         if not _download(asset_url, dest):
             return False
         try:
-            flags = 0x00000008 if os.name == "nt" else 0  # DETACHED_PROCESS — survive our quit
+            flags = (
+                0x00000008 if os.name == "nt" else 0
+            )  # DETACHED_PROCESS — survive our quit
             subprocess.Popen(
                 [str(dest), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"],
-                creationflags=flags, close_fds=True,
+                creationflags=flags,
+                close_fds=True,
             )
         except Exception:
             return False
@@ -312,6 +350,7 @@ def apply_update(asset_url: str) -> bool:
 
 
 # --- in-GUI log capture ------------------------------------------------------------------------
+
 
 class _GuiLog:
     """File-like object that funnels writes into the Logs textbox (from any thread)."""
@@ -370,7 +409,9 @@ def _acquire_singleton() -> bool:
         try:
             import ctypes
 
-            _singleton_handle = ctypes.windll.kernel32.CreateMutexW(None, False, "M365CopilotProxy.singleton")
+            _singleton_handle = ctypes.windll.kernel32.CreateMutexW(
+                None, False, "M365CopilotProxy.singleton"
+            )
             return ctypes.windll.kernel32.GetLastError() != 183  # ERROR_ALREADY_EXISTS
         except Exception:
             return True
@@ -405,10 +446,11 @@ def run_tray() -> None:
 
     def check_browser_status():
         from .cli import _edge_debug_tabs
+
         while True:
             try:
                 tabs = _edge_debug_tabs(controller.cdp_port)
-                controller.browser_running = (tabs is not None)
+                controller.browser_running = tabs is not None
             except Exception:
                 controller.browser_running = False
             time.sleep(1.5)
@@ -435,11 +477,22 @@ def run_tray() -> None:
     ctk.CTkLabel(header, image=logo_img, text="").pack(side="left", padx=(0, 10))
     titlebox = ctk.CTkFrame(header, fg_color="transparent")
     titlebox.pack(side="left")
-    ctk.CTkLabel(titlebox, text="M365 Copilot Proxy", font=ctk.CTkFont(size=16, weight="bold"), text_color=TEXT).pack(anchor="w")
-    ctk.CTkLabel(titlebox, text=f"v{APP_VERSION}", font=ctk.CTkFont(size=11), text_color=MUTED).pack(anchor="w")
+    ctk.CTkLabel(
+        titlebox,
+        text="M365 Copilot Proxy",
+        font=ctk.CTkFont(size=16, weight="bold"),
+        text_color=TEXT,
+    ).pack(anchor="w")
+    ctk.CTkLabel(
+        titlebox, text=f"v{APP_VERSION}", font=ctk.CTkFont(size=11), text_color=MUTED
+    ).pack(anchor="w")
 
-    tabs = ctk.CTkTabview(app, fg_color=CARD, segmented_button_selected_color=ACCENT,
-                          segmented_button_selected_hover_color=ACCENT_HOVER)
+    tabs = ctk.CTkTabview(
+        app,
+        fg_color=CARD,
+        segmented_button_selected_color=ACCENT,
+        segmented_button_selected_hover_color=ACCENT_HOVER,
+    )
     tabs.pack(padx=14, pady=(8, 4), fill="both", expand=True)
     t_status = tabs.add("Status")
     t_logs = tabs.add("Logs")
@@ -448,10 +501,21 @@ def run_tray() -> None:
 
     # ---- Status tab ----
     dot = ctk.CTkFrame(t_status, width=16, height=16, corner_radius=8, fg_color=MUTED)
-    dot.pack(pady=(26, 8)); dot.pack_propagate(False)
-    status_lbl = ctk.CTkLabel(t_status, text="Disconnected", font=ctk.CTkFont(size=24, weight="bold"), text_color=TEXT)
+    dot.pack(pady=(26, 8))
+    dot.pack_propagate(False)
+    status_lbl = ctk.CTkLabel(
+        t_status,
+        text="Disconnected",
+        font=ctk.CTkFont(size=24, weight="bold"),
+        text_color=TEXT,
+    )
     status_lbl.pack()
-    sub_lbl = ctk.CTkLabel(t_status, text="The proxy is not running", font=ctk.CTkFont(size=12), text_color=MUTED)
+    sub_lbl = ctk.CTkLabel(
+        t_status,
+        text="The proxy is not running",
+        font=ctk.CTkFont(size=12),
+        text_color=MUTED,
+    )
     sub_lbl.pack(pady=(2, 18))
 
     rows = ctk.CTkFrame(t_status, fg_color="transparent")
@@ -460,41 +524,70 @@ def run_tray() -> None:
     def _row(label: str):
         line = ctk.CTkFrame(rows, fg_color="transparent")
         line.pack(fill="x", pady=3)
-        ctk.CTkLabel(line, text=label, font=ctk.CTkFont(size=12), text_color=MUTED).pack(side="left")
-        val = ctk.CTkLabel(line, text="-", font=ctk.CTkFont(size=12, weight="bold"), text_color=TEXT)
+        ctk.CTkLabel(
+            line, text=label, font=ctk.CTkFont(size=12), text_color=MUTED
+        ).pack(side="left")
+        val = ctk.CTkLabel(
+            line, text="-", font=ctk.CTkFont(size=12, weight="bold"), text_color=TEXT
+        )
         val.pack(side="right")
         return val
 
     endpoint_val = _row("Endpoint")
     token_val = _row("Token")
 
-    hint_lbl = ctk.CTkLabel(t_status, text="", font=ctk.CTkFont(size=11), text_color=ACCENT,
-                            wraplength=330, justify="center")
+    hint_lbl = ctk.CTkLabel(
+        t_status,
+        text="",
+        font=ctk.CTkFont(size=11),
+        text_color=ACCENT,
+        wraplength=330,
+        justify="center",
+    )
     hint_lbl.pack(padx=18, pady=(14, 0))
 
-    update_btn = ctk.CTkButton(t_status, text="", height=34, corner_radius=17,
-                               font=ctk.CTkFont(size=12, weight="bold"), fg_color=GREEN, hover_color="#3CB179")
+    update_btn = ctk.CTkButton(
+        t_status,
+        text="",
+        height=34,
+        corner_radius=17,
+        font=ctk.CTkFont(size=12, weight="bold"),
+        fg_color=GREEN,
+        hover_color="#3CB179",
+    )
     pending_update: dict[str, str] = {}
 
     # Reload = reconnect the proxy (apply edited settings). Shown only while connected (in refresh()).
-    reload_btn = ctk.CTkButton(t_status, text="↻ Reload (reconnect)", height=34, corner_radius=17,
-                               font=ctk.CTkFont(size=12, weight="bold"), fg_color=CARD, hover_color="#2A2A33")
+    reload_btn = ctk.CTkButton(
+        t_status,
+        text="↻ Reload (reconnect)",
+        height=34,
+        corner_radius=17,
+        font=ctk.CTkFont(size=12, weight="bold"),
+        fg_color=CARD,
+        hover_color="#2A2A33",
+    )
 
     def toggle_browser():
         from .cli import _launch_debug_edge
+
         browser_btn.configure(state="disabled")
         if controller.browser_running:
+
             def work():
                 try:
                     import asyncio
                     from .cli import _cdp_close_browser
+
                     asyncio.run(_cdp_close_browser(controller.cdp_port))
                 except Exception:
                     pass
                 finally:
                     app.after(0, lambda: browser_btn.configure(state="normal"))
+
             threading.Thread(target=work, daemon=True).start()
         else:
+
             def work():
                 try:
                     _launch_debug_edge(controller.cdp_port)
@@ -502,25 +595,55 @@ def run_tray() -> None:
                     pass
                 finally:
                     app.after(0, lambda: browser_btn.configure(state="normal"))
+
             threading.Thread(target=work, daemon=True).start()
 
-    browser_btn = ctk.CTkButton(t_status, text="Show Browser", height=34, corner_radius=17,
-                                font=ctk.CTkFont(size=12, weight="bold"), fg_color=CARD, hover_color="#2A2A33",
-                                command=toggle_browser)
+    browser_btn = ctk.CTkButton(
+        t_status,
+        text="Show Browser",
+        height=34,
+        corner_radius=17,
+        font=ctk.CTkFont(size=12, weight="bold"),
+        fg_color=CARD,
+        hover_color="#2A2A33",
+        command=toggle_browser,
+    )
 
-    toggle_btn = ctk.CTkButton(t_status, text="Connect", height=46, corner_radius=23,
-                               font=ctk.CTkFont(size=15, weight="bold"), fg_color=ACCENT, hover_color=ACCENT_HOVER)
+    toggle_btn = ctk.CTkButton(
+        t_status,
+        text="Connect",
+        height=46,
+        corner_radius=23,
+        font=ctk.CTkFont(size=15, weight="bold"),
+        fg_color=ACCENT,
+        hover_color=ACCENT_HOVER,
+    )
     toggle_btn.pack(padx=18, pady=(22, 8), fill="x", side="bottom")
     browser_btn.pack(padx=18, pady=(0, 4), fill="x", side="bottom", before=toggle_btn)
 
     # ---- Logs tab ----
-    log_box = ctk.CTkTextbox(t_logs, fg_color="#101014", text_color="#C9C9D0",
-                             font=ctk.CTkFont(family="Consolas", size=11), wrap="word")
+    log_box = ctk.CTkTextbox(
+        t_logs,
+        fg_color="#101014",
+        text_color="#C9C9D0",
+        font=ctk.CTkFont(family="Consolas", size=11),
+        wrap="word",
+    )
     log_box.pack(padx=8, pady=(8, 4), fill="both", expand=True)
     log_box.configure(state="disabled")
-    ctk.CTkButton(t_logs, text="Clear", height=28, width=80, fg_color=CARD, hover_color="#2A2A33",
-                  command=lambda: (log_box.configure(state="normal"), log_box.delete("1.0", "end"),
-                                   log_box.configure(state="disabled"))).pack(pady=(0, 8))
+    ctk.CTkButton(
+        t_logs,
+        text="Clear",
+        height=28,
+        width=80,
+        fg_color=CARD,
+        hover_color="#2A2A33",
+        command=lambda: (
+            log_box.configure(state="normal"),
+            log_box.delete("1.0", "end"),
+            log_box.configure(state="disabled"),
+        ),
+    ).pack(pady=(0, 8))
 
     # ---- Settings tab ----
     vars_: dict[str, object] = {}
@@ -528,14 +651,20 @@ def run_tray() -> None:
     sform.pack(fill="both", expand=True, padx=4, pady=4)
 
     port_var = ctk.StringVar(value=str(settings["port"]))
-    pr = ctk.CTkFrame(sform, fg_color="transparent"); pr.pack(fill="x", pady=6)
-    ctk.CTkLabel(pr, text="Port", font=ctk.CTkFont(size=12), text_color=TEXT).pack(side="left")
+    pr = ctk.CTkFrame(sform, fg_color="transparent")
+    pr.pack(fill="x", pady=6)
+    ctk.CTkLabel(pr, text="Port", font=ctk.CTkFont(size=12), text_color=TEXT).pack(
+        side="left"
+    )
     ctk.CTkEntry(pr, textvariable=port_var, width=90).pack(side="right")
     vars_["port"] = port_var
 
     def _switch(parent, key: str, label: str):
-        row = ctk.CTkFrame(parent, fg_color="transparent"); row.pack(fill="x", pady=6)
-        ctk.CTkLabel(row, text=label, font=ctk.CTkFont(size=12), text_color=TEXT).pack(side="left")
+        row = ctk.CTkFrame(parent, fg_color="transparent")
+        row.pack(fill="x", pady=6)
+        ctk.CTkLabel(row, text=label, font=ctk.CTkFont(size=12), text_color=TEXT).pack(
+            side="left"
+        )
         sw = ctk.CTkSwitch(row, text="", progress_color=ACCENT)
         sw.pack(side="right")
         sw.select() if settings.get(key) else sw.deselect()
@@ -558,8 +687,11 @@ def run_tray() -> None:
     reload_btn.configure(command=reconnect_async)
 
     # Manual client wiring (Claude Code global env + VS Code custom model): apply / remove on demand.
-    cfg_row = ctk.CTkFrame(sform, fg_color="transparent"); cfg_row.pack(fill="x", pady=(14, 6))
-    ctk.CTkLabel(cfg_row, text="Global client config", font=ctk.CTkFont(size=12), text_color=TEXT).pack(side="left")
+    cfg_row = ctk.CTkFrame(sform, fg_color="transparent")
+    cfg_row.pack(fill="x", pady=(14, 6))
+    ctk.CTkLabel(
+        cfg_row, text="Global client config", font=ctk.CTkFont(size=12), text_color=TEXT
+    ).pack(side="left")
 
     def _client_config(undo: bool):
         from .cli import _configure_clients
@@ -568,15 +700,36 @@ def run_tray() -> None:
             try:
                 _configure_clients(undo=undo, base_url=controller.base_url)
             except Exception as exc:
-                print(f"  ! client config {'remove' if undo else 'apply'} failed: {exc}")
+                print(
+                    f"  ! client config {'remove' if undo else 'apply'} failed: {exc}"
+                )
+
         threading.Thread(target=work, daemon=True).start()
 
-    ctk.CTkButton(cfg_row, text="Remove", width=72, height=28, corner_radius=14, fg_color="#2A2A33",
-                  hover_color=RED, command=lambda: _client_config(True)).pack(side="right", padx=(6, 0))
-    ctk.CTkButton(cfg_row, text="Apply", width=72, height=28, corner_radius=14, fg_color=ACCENT,
-                  hover_color=ACCENT_HOVER, command=lambda: _client_config(False)).pack(side="right")
+    ctk.CTkButton(
+        cfg_row,
+        text="Remove",
+        width=72,
+        height=28,
+        corner_radius=14,
+        fg_color="#2A2A33",
+        hover_color=RED,
+        command=lambda: _client_config(True),
+    ).pack(side="right", padx=(6, 0))
+    ctk.CTkButton(
+        cfg_row,
+        text="Apply",
+        width=72,
+        height=28,
+        corner_radius=14,
+        fg_color=ACCENT,
+        hover_color=ACCENT_HOVER,
+        command=lambda: _client_config(False),
+    ).pack(side="right")
 
-    save_hint = ctk.CTkLabel(t_settings, text="", font=ctk.CTkFont(size=11), text_color=GREEN)
+    save_hint = ctk.CTkLabel(
+        t_settings, text="", font=ctk.CTkFont(size=11), text_color=GREEN
+    )
     save_hint.pack()
 
     def save_clicked():
@@ -584,8 +737,17 @@ def run_tray() -> None:
             settings["port"] = int(port_var.get())
         except ValueError:
             pass
-        for key in ("auto_connect", "temporary_chat", "work_grounding", "configure_clients",
-                    "launch_edge", "auto_refresh", "persist_default", "ws_reuse", "hide_on_token_success"):
+        for key in (
+            "auto_connect",
+            "temporary_chat",
+            "work_grounding",
+            "configure_clients",
+            "launch_edge",
+            "auto_refresh",
+            "persist_default",
+            "ws_reuse",
+            "hide_on_token_success",
+        ):
             settings[key] = bool(vars_[key].get())  # type: ignore[attr-defined]
         save_settings(settings)
         if controller.running:
@@ -595,8 +757,15 @@ def run_tray() -> None:
             save_hint.configure(text="Saved.")
         app.after(2500, lambda: save_hint.configure(text=""))
 
-    ctk.CTkButton(t_settings, text="Save", height=36, corner_radius=18, fg_color=ACCENT,
-                  hover_color=ACCENT_HOVER, command=save_clicked).pack(padx=8, pady=8, fill="x", side="bottom")
+    ctk.CTkButton(
+        t_settings,
+        text="Save",
+        height=36,
+        corner_radius=18,
+        fg_color=ACCENT,
+        hover_color=ACCENT_HOVER,
+        command=save_clicked,
+    ).pack(padx=8, pady=8, fill="x", side="bottom")
 
     # ---- Passthrough tab ----
     pform = ctk.CTkFrame(t_passthrough, fg_color="transparent")
@@ -604,8 +773,11 @@ def run_tray() -> None:
     ctk.CTkLabel(
         pform,
         text="Models that aren't ours (non m365-*) are forwarded straight to the real Anthropic\n"
-             "API. Default credential = your Claude Code login (free, uses your subscription).",
-        font=ctk.CTkFont(size=11), text_color=MUTED, justify="left", wraplength=360,
+        "API. Default credential = your Claude Code login (free, uses your subscription).",
+        font=ctk.CTkFont(size=11),
+        text_color=MUTED,
+        justify="left",
+        wraplength=360,
     ).pack(anchor="w", pady=(0, 10))
     _switch(pform, "passthrough_claude", "Forward non-m365 models to Claude")
 
@@ -625,17 +797,32 @@ def run_tray() -> None:
         exp = int(oauth.get("expiresAt") or 0)
         if exp:
             left = int((exp / 1000 - time.time()) / 60)
-            return f"Claude Code OAuth: valid ({left}m left)" if left > 0 else "Claude Code OAuth: expired (auto-refresh on use)"
+            return (
+                f"Claude Code OAuth: valid ({left}m left)"
+                if left > 0
+                else "Claude Code OAuth: expired (auto-refresh on use)"
+            )
         return "Claude Code OAuth: valid"
 
-    cred_hint = ctk.CTkLabel(pform, text=_oauth_status(), font=ctk.CTkFont(size=11), text_color=GREEN,
-                             justify="left", wraplength=360)
+    cred_hint = ctk.CTkLabel(
+        pform,
+        text=_oauth_status(),
+        font=ctk.CTkFont(size=11),
+        text_color=GREEN,
+        justify="left",
+        wraplength=360,
+    )
     cred_hint.pack(anchor="w", pady=(8, 4))
 
     # Single token field: shows the token from the JSON; editing + Apply overwrites the JSON.
-    hdr = ctk.CTkFrame(pform, fg_color="transparent"); hdr.pack(fill="x", pady=(12, 2))
-    ctk.CTkLabel(hdr, text="Token (source: ~/.claude/.credentials.json)", font=ctk.CTkFont(size=12),
-                 text_color=TEXT).pack(side="left")
+    hdr = ctk.CTkFrame(pform, fg_color="transparent")
+    hdr.pack(fill="x", pady=(12, 2))
+    ctk.CTkLabel(
+        hdr,
+        text="Token (source: ~/.claude/.credentials.json)",
+        font=ctk.CTkFont(size=12),
+        text_color=TEXT,
+    ).pack(side="left")
     _reveal = [False]
 
     def _toggle_reveal():
@@ -649,16 +836,41 @@ def run_tray() -> None:
             app.clipboard_clear()
             app.clipboard_append(t)
 
-    reveal_btn = ctk.CTkButton(hdr, text="Show", width=58, height=24, corner_radius=12,
-                               fg_color=CARD, hover_color="#2A2A33", command=_toggle_reveal)
+    reveal_btn = ctk.CTkButton(
+        hdr,
+        text="Show",
+        width=58,
+        height=24,
+        corner_radius=12,
+        fg_color=CARD,
+        hover_color="#2A2A33",
+        command=_toggle_reveal,
+    )
     reveal_btn.pack(side="right")
-    ctk.CTkButton(hdr, text="Copy", width=58, height=24, corner_radius=12,
-                  fg_color=CARD, hover_color="#2A2A33", command=_copy_token).pack(side="right", padx=(0, 6))
-    tok_var = ctk.StringVar(value=(_read_creds().get("claudeAiOauth", {}).get("accessToken", "") or ""))
+    ctk.CTkButton(
+        hdr,
+        text="Copy",
+        width=58,
+        height=24,
+        corner_radius=12,
+        fg_color=CARD,
+        hover_color="#2A2A33",
+        command=_copy_token,
+    ).pack(side="right", padx=(0, 6))
+    tok_var = ctk.StringVar(
+        value=(_read_creds().get("claudeAiOauth", {}).get("accessToken", "") or "")
+    )
     tok_entry = ctk.CTkEntry(pform, textvariable=tok_var, show="•")
     tok_entry.pack(fill="x")
 
-    pt_hint = ctk.CTkLabel(pform, text="", font=ctk.CTkFont(size=11), text_color=GREEN, justify="left", wraplength=360)
+    pt_hint = ctk.CTkLabel(
+        pform,
+        text="",
+        font=ctk.CTkFont(size=11),
+        text_color=GREEN,
+        justify="left",
+        wraplength=360,
+    )
     pt_hint.pack(anchor="w", pady=(6, 0))
 
     def save_passthrough():
@@ -684,39 +896,68 @@ def run_tray() -> None:
         pt_hint.configure(text=msg)
         app.after(3000, lambda: pt_hint.configure(text=""))
 
-    ctk.CTkButton(t_passthrough, text="Apply", height=36, corner_radius=18, fg_color=ACCENT,
-                  hover_color=ACCENT_HOVER, command=save_passthrough).pack(padx=8, pady=8, fill="x", side="bottom")
+    ctk.CTkButton(
+        t_passthrough,
+        text="Apply",
+        height=36,
+        corner_radius=18,
+        fg_color=ACCENT,
+        hover_color=ACCENT_HOVER,
+        command=save_passthrough,
+    ).pack(padx=8, pady=8, fill="x", side="bottom")
 
     footer = ctk.CTkFrame(app, fg_color="transparent")
     footer.pack(side="bottom", fill="x", padx=16, pady=(0, 10))
-    ctk.CTkLabel(footer, text="X = hide to tray", font=ctk.CTkFont(size=10), text_color=MUTED).pack(side="left")
-    quit_button = ctk.CTkButton(footer, text="Quit", width=76, height=28, corner_radius=14,
-                                fg_color="#2A2A33", hover_color=RED, text_color=TEXT,
-                                font=ctk.CTkFont(size=12, weight="bold"))
+    ctk.CTkLabel(
+        footer, text="X = hide to tray", font=ctk.CTkFont(size=10), text_color=MUTED
+    ).pack(side="left")
+    quit_button = ctk.CTkButton(
+        footer,
+        text="Quit",
+        width=76,
+        height=28,
+        corner_radius=14,
+        fg_color="#2A2A33",
+        hover_color=RED,
+        text_color=TEXT,
+        font=ctk.CTkFont(size=12, weight="bold"),
+    )
     quit_button.pack(side="right")
 
     # --- behaviour ---
-    _tray_state: list[object] = [None]  # last status pushed to the tray badge (avoid redundant redraws)
+    _tray_state: list[object] = [
+        None
+    ]  # last status pushed to the tray badge (avoid redundant redraws)
 
     def refresh():
         on = controller.running
         dot.configure(fg_color=GREEN if on else MUTED)
         status_lbl.configure(text="Connected" if on else "Disconnected")
-        sub_lbl.configure(text=controller.base_url if on else "The proxy is not running")
+        sub_lbl.configure(
+            text=controller.base_url if on else "The proxy is not running"
+        )
         endpoint_val.configure(text=controller.base_url)
         token_val.configure(text=controller.token_info() if on else "-")
         hint_lbl.configure(
             text="↻ Reload VS Code (Ctrl+Shift+P → Reload Window) to load the M365 model"
-            if on and settings.get("configure_clients", True) else ""
+            if on and settings.get("configure_clients", True)
+            else ""
         )
         if browser_btn.cget("state") == "normal":
-            browser_btn.configure(text="Hide Browser" if controller.browser_running else "Show Browser")
+            browser_btn.configure(
+                text="Hide Browser" if controller.browser_running else "Show Browser"
+            )
         if on:
-            reload_btn.pack(padx=18, pady=(0, 4), fill="x", side="bottom", before=browser_btn)
+            reload_btn.pack(
+                padx=18, pady=(0, 4), fill="x", side="bottom", before=browser_btn
+            )
         else:
             reload_btn.pack_forget()
-        toggle_btn.configure(text="Disconnect" if on else "Connect",
-                             fg_color=RED if on else ACCENT, hover_color=RED_HOVER if on else ACCENT_HOVER)
+        toggle_btn.configure(
+            text="Disconnect" if on else "Connect",
+            fg_color=RED if on else ACCENT,
+            hover_color=RED_HOVER if on else ACCENT_HOVER,
+        )
         try:
             icon.title = f"M365 Copilot Proxy - {'Connected' if on else 'Disconnected'}"
             if _tray_state[0] != on:
@@ -731,7 +972,10 @@ def run_tray() -> None:
         app.after(1500, refresh)
 
     def toggle():
-        toggle_btn.configure(state="disabled", text="Disconnecting..." if controller.running else "Connecting...")
+        toggle_btn.configure(
+            state="disabled",
+            text="Disconnecting..." if controller.running else "Connecting...",
+        )
 
         def work():
             try:
@@ -751,23 +995,59 @@ def run_tray() -> None:
 
         def work():
             ok = apply_update(url)
-            app.after(0, quit_app if ok else lambda: update_btn.configure(state="normal", text="Update failed - retry"))
+            app.after(
+                0,
+                quit_app
+                if ok
+                else lambda: update_btn.configure(
+                    state="normal", text="Update failed - retry"
+                ),
+            )
 
         threading.Thread(target=work, daemon=True).start()
 
     def show_update(tag: str, url: str):
         pending_update.update({"tag": tag, "url": url})
         update_btn.configure(text=f"Update available: {tag}", command=do_update)
-        update_btn.pack(padx=18, pady=(0, 4), fill="x", side="bottom", before=toggle_btn)
+        update_btn.pack(
+            padx=18, pady=(0, 4), fill="x", side="bottom", before=toggle_btn
+        )
         win = ctk.CTkToplevel(app)
-        win.title("Update available"); win.geometry("320x180"); win.configure(fg_color=BG)
-        win.transient(app); win.grab_set()
-        ctk.CTkLabel(win, text="Update available", font=ctk.CTkFont(size=16, weight="bold"), text_color=TEXT).pack(pady=(22, 4))
-        ctk.CTkLabel(win, text=f"{tag} is available (you have v{APP_VERSION}).", font=ctk.CTkFont(size=12), text_color=MUTED).pack()
-        b = ctk.CTkFrame(win, fg_color="transparent"); b.pack(pady=20)
-        ctk.CTkButton(b, text="Later", width=110, fg_color=CARD, hover_color="#2A2A33", command=win.destroy).pack(side="left", padx=6)
-        ctk.CTkButton(b, text="Update & restart", width=150, fg_color=ACCENT, hover_color=ACCENT_HOVER,
-                      command=lambda: (win.destroy(), do_update())).pack(side="left", padx=6)
+        win.title("Update available")
+        win.geometry("320x180")
+        win.configure(fg_color=BG)
+        win.transient(app)
+        win.grab_set()
+        ctk.CTkLabel(
+            win,
+            text="Update available",
+            font=ctk.CTkFont(size=16, weight="bold"),
+            text_color=TEXT,
+        ).pack(pady=(22, 4))
+        ctk.CTkLabel(
+            win,
+            text=f"{tag} is available (you have v{APP_VERSION}).",
+            font=ctk.CTkFont(size=12),
+            text_color=MUTED,
+        ).pack()
+        b = ctk.CTkFrame(win, fg_color="transparent")
+        b.pack(pady=20)
+        ctk.CTkButton(
+            b,
+            text="Later",
+            width=110,
+            fg_color=CARD,
+            hover_color="#2A2A33",
+            command=win.destroy,
+        ).pack(side="left", padx=6)
+        ctk.CTkButton(
+            b,
+            text="Update & restart",
+            width=150,
+            fg_color=ACCENT,
+            hover_color=ACCENT_HOVER,
+            command=lambda: (win.destroy(), do_update()),
+        ).pack(side="left", padx=6)
 
     # --- redirect stdout/logging into the Logs tab (windowed build has no console) ---
     gui_log = _GuiLog(app, log_box)
@@ -795,8 +1075,15 @@ def run_tray() -> None:
     quit_button.configure(command=quit_app)
 
     menu = pystray.Menu(
-        pystray.MenuItem("Open", lambda i, it: app.after(0, lambda: (app.deiconify(), app.lift())), default=True),
-        pystray.MenuItem(lambda it: "Disconnect" if controller.running else "Connect", lambda i, it: app.after(0, toggle)),
+        pystray.MenuItem(
+            "Open",
+            lambda i, it: app.after(0, lambda: (app.deiconify(), app.lift())),
+            default=True,
+        ),
+        pystray.MenuItem(
+            lambda it: "Disconnect" if controller.running else "Connect",
+            lambda i, it: app.after(0, toggle),
+        ),
         pystray.MenuItem("Quit", lambda i, it: app.after(0, quit_app)),
     )
     icon = pystray.Icon("m365-copilot-proxy", tray_image, "M365 Copilot Proxy", menu)

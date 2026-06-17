@@ -196,8 +196,7 @@ def test_opencode_tool_calls_runtime_bridge_real_model(tmp_path: Path) -> None:
             events = _json_events(proc.stdout)
             tool_events = [e for e in events if e.get("type") == "tool_use"]
             read_events = [
-                e for e in tool_events
-                if (e.get("part") or {}).get("tool") == "read"
+                e for e in tool_events if (e.get("part") or {}).get("tool") == "read"
             ]
             if read_events:
                 read_state = (read_events[0].get("part") or {}).get("state") or {}
@@ -224,7 +223,9 @@ def test_opencode_tool_calls_runtime_bridge_real_model(tmp_path: Path) -> None:
     assert sample.read_text(encoding="utf-8") == TARGET_CONTENT
     assert _BEGIN not in proc.stdout
 
-    assert events, f"no JSON events returned\nstdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+    assert events, (
+        f"no JSON events returned\nstdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+    )
 
     if read_state is None:
         pytest.skip(
@@ -234,8 +235,7 @@ def test_opencode_tool_calls_runtime_bridge_real_model(tmp_path: Path) -> None:
     tool_events = [e for e in events if e.get("type") == "tool_use"]
     assert tool_events, "read tool was never executed"
     read_events = [
-        e for e in tool_events
-        if (e.get("part") or {}).get("tool") == "read"
+        e for e in tool_events if (e.get("part") or {}).get("tool") == "read"
     ]
     assert read_events, "no read tool event emitted"
 
@@ -264,8 +264,8 @@ def test_opencode_tool_calls_runtime_bridge_real_model(tmp_path: Path) -> None:
     response_log_path.parent.mkdir(parents=True, exist_ok=True)
     response_log_path.write_text(response, encoding="utf-8")
 
-    response_clean = response.rstrip('\n')
-    expected_clean = TARGET_CONTENT.rstrip('\n')
+    response_clean = response.rstrip("\n")
+    expected_clean = TARGET_CONTENT.rstrip("\n")
     assert response_clean == expected_clean, (
         f"Model response does not match file content exactly.\n"
         f"Expected: {repr(expected_clean)}\n"

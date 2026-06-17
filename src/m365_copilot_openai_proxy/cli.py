@@ -88,7 +88,15 @@ async def _cdp_extract_token(port: int, *, allow_nudge: bool = True) -> str | No
 
     try:
         async with websockets.connect(tab["webSocketDebuggerUrl"]) as ws:
-            await ws.send(json.dumps({"id": 1, "method": "Runtime.evaluate", "params": {"expression": _CDP_JS}}))
+            await ws.send(
+                json.dumps(
+                    {
+                        "id": 1,
+                        "method": "Runtime.evaluate",
+                        "params": {"expression": _CDP_JS},
+                    }
+                )
+            )
             result = json.loads(await ws.recv())
             candidates = result.get("result", {}).get("result", {}).get("value") or []
             for token in candidates:
@@ -122,7 +130,15 @@ async def _cdp_capture_websocket_token(port: int, timeout_seconds: int) -> str |
                 # Reload the page so the app deterministically opens a fresh authenticated
                 # websocket (an idle tab won't create one on its own).
                 await ws.send(json.dumps({"id": 2, "method": "Page.enable"}))
-                await ws.send(json.dumps({"id": 3, "method": "Page.reload", "params": {"ignoreCache": False}}))
+                await ws.send(
+                    json.dumps(
+                        {
+                            "id": 3,
+                            "method": "Page.reload",
+                            "params": {"ignoreCache": False},
+                        }
+                    )
+                )
                 token = await _wait_for_substrate_websocket_token(ws, deadline)
                 if token:
                     return token
@@ -156,7 +172,8 @@ async def _wait_for_substrate_websocket_token(ws, deadline: float) -> str | None
 def _find_m365_page(tabs: list[dict]) -> dict | None:
     return next(
         (
-            tab for tab in tabs
+            tab
+            for tab in tabs
             if tab.get("type") == "page"
             and tab.get("url", "").startswith("https://m365.cloud.microsoft/")
         ),
@@ -240,39 +257,60 @@ def _startup_capture_loop(cdp_port: int, timeout_seconds: int) -> None:
         _close_debug_browser(cdp_port)
         return
     print("Waiting for a Substrate token from the debug Edge M365 Copilot tab...")
-    print("If needed: press F5 in Copilot, click the message box, and type one character.")
+    print(
+        "If needed: press F5 in Copilot, click the message box, and type one character."
+    )
     if _capture_token_to_env(cdp_port, timeout_seconds):
         print(".env updated with Substrate token.")
         _close_debug_browser(cdp_port)
     else:
         print("Startup token capture timed out. Manual set-token is still available.")
 
+
 async def _cdp_nudge_and_wait_for_token(ws) -> str | None:
     await ws.send(json.dumps({"id": 2, "method": "Network.enable"}))
-    await ws.send(json.dumps({"id": 3, "method": "Runtime.evaluate", "params": {"expression": _CDP_NUDGE_JS}}))
-    await ws.send(json.dumps({"id": 4, "method": "Input.insertText", "params": {"text": " "}}))
-    await ws.send(json.dumps({
-        "id": 5,
-        "method": "Input.dispatchKeyEvent",
-        "params": {
-            "type": "keyDown",
-            "windowsVirtualKeyCode": 8,
-            "nativeVirtualKeyCode": 8,
-            "key": "Backspace",
-            "code": "Backspace",
-        },
-    }))
-    await ws.send(json.dumps({
-        "id": 6,
-        "method": "Input.dispatchKeyEvent",
-        "params": {
-            "type": "keyUp",
-            "windowsVirtualKeyCode": 8,
-            "nativeVirtualKeyCode": 8,
-            "key": "Backspace",
-            "code": "Backspace",
-        },
-    }))
+    await ws.send(
+        json.dumps(
+            {
+                "id": 3,
+                "method": "Runtime.evaluate",
+                "params": {"expression": _CDP_NUDGE_JS},
+            }
+        )
+    )
+    await ws.send(
+        json.dumps({"id": 4, "method": "Input.insertText", "params": {"text": " "}})
+    )
+    await ws.send(
+        json.dumps(
+            {
+                "id": 5,
+                "method": "Input.dispatchKeyEvent",
+                "params": {
+                    "type": "keyDown",
+                    "windowsVirtualKeyCode": 8,
+                    "nativeVirtualKeyCode": 8,
+                    "key": "Backspace",
+                    "code": "Backspace",
+                },
+            }
+        )
+    )
+    await ws.send(
+        json.dumps(
+            {
+                "id": 6,
+                "method": "Input.dispatchKeyEvent",
+                "params": {
+                    "type": "keyUp",
+                    "windowsVirtualKeyCode": 8,
+                    "nativeVirtualKeyCode": 8,
+                    "key": "Backspace",
+                    "code": "Backspace",
+                },
+            }
+        )
+    )
     deadline = asyncio.get_running_loop().time() + 10
     while asyncio.get_running_loop().time() < deadline:
         try:
@@ -328,8 +366,15 @@ async def _read_msal_via_cdp(port: int) -> dict | None:
         return None
     try:
         async with websockets.connect(tab["webSocketDebuggerUrl"], max_size=None) as ws:
-            await ws.send(json.dumps({"id": 1, "method": "Runtime.evaluate",
-                                      "params": {"expression": _MSAL_READ_JS, "returnByValue": True}}))
+            await ws.send(
+                json.dumps(
+                    {
+                        "id": 1,
+                        "method": "Runtime.evaluate",
+                        "params": {"expression": _MSAL_READ_JS, "returnByValue": True},
+                    }
+                )
+            )
             while True:
                 r = json.loads(await ws.recv())
                 if r.get("id") == 1:
@@ -338,7 +383,9 @@ async def _read_msal_via_cdp(port: int) -> dict | None:
         return None
 
 
-def _mint_substrate(refresh_token: str, tenant: str, client_id: str) -> tuple[str, str] | None:
+def _mint_substrate(
+    refresh_token: str, tenant: str, client_id: str
+) -> tuple[str, str] | None:
     """Exchange a (FOCI) refresh token for a fresh substrate/sydney access token. Returns (access, new_refresh)."""
     body = {
         "grant_type": "refresh_token",
@@ -359,7 +406,9 @@ def _mint_substrate(refresh_token: str, tenant: str, client_id: str) -> tuple[st
         return None
     access = j.get("access_token")
     if not access:
-        print(f"Mint rejected: {j.get('error')} - {str(j.get('error_description', ''))[:160]}")
+        print(
+            f"Mint rejected: {j.get('error')} - {str(j.get('error_description', ''))[:160]}"
+        )
         return None
     return access, j.get("refresh_token") or refresh_token
 
@@ -393,7 +442,9 @@ def _capture_refresh_token_via_cdp(cdp_port: int) -> bool:
     _write_env_value("M365_REFRESH_TOKEN", rt)
     _write_env_value("M365_TENANT_ID", tenant)
     _write_env_value("M365_CLIENT_ID", client_id)
-    print("Captured MSAL refresh token; minting substrate token via HTTP (no browser needed from now on).")
+    print(
+        "Captured MSAL refresh token; minting substrate token via HTTP (no browser needed from now on)."
+    )
     return _foci_refresh_from_env()
 
 
@@ -473,7 +524,9 @@ def _write_env_value(key: str, value: str) -> None:
         if re.search(pattern, text):
             text = re.sub(pattern, f"{key}={value}", text)
         else:
-            text += ("" if text.endswith("\n") or not text else "\n") + f"{key}={value}\n"
+            text += (
+                "" if text.endswith("\n") or not text else "\n"
+            ) + f"{key}={value}\n"
     else:
         text = f"{key}={value}\n"
     env_path.write_text(text, encoding="utf-8")
@@ -483,7 +536,9 @@ def _read_env_value(key: str) -> str | None:
     env_path = Path(".env")
     if not env_path.exists():
         return None
-    match = re.search(rf"(?m)^{re.escape(key)}=(.*)$", env_path.read_text(encoding="utf-8"))
+    match = re.search(
+        rf"(?m)^{re.escape(key)}=(.*)$", env_path.read_text(encoding="utf-8")
+    )
     return match.group(1).strip().strip("\"'") if match else None
 
 
@@ -499,42 +554,101 @@ def main() -> None:
     subparsers.add_parser(
         "set-token", help="paste a substrate access token or WebSocket URL into .env"
     ).set_defaults(func=set_token_command)
-    capture_parser = subparsers.add_parser("capture-token", help="listen for a substrate token via Edge CDP")
-    capture_parser.add_argument("--cdp-port", type=int, default=9222, help="Edge remote-debugging port (default: 9222)")
-    capture_parser.add_argument("--timeout-seconds", type=int, default=60, help="give up after this many seconds (default: 60)")
+    capture_parser = subparsers.add_parser(
+        "capture-token", help="listen for a substrate token via Edge CDP"
+    )
+    capture_parser.add_argument(
+        "--cdp-port",
+        type=int,
+        default=9222,
+        help="Edge remote-debugging port (default: 9222)",
+    )
+    capture_parser.add_argument(
+        "--timeout-seconds",
+        type=int,
+        default=60,
+        help="give up after this many seconds (default: 60)",
+    )
     capture_parser.set_defaults(func=capture_token_command)
 
-    launch_parser = subparsers.add_parser("launch-edge", help="open the dedicated debug Edge window for M365 Copilot")
-    launch_parser.add_argument("--cdp-port", type=int, default=9222, help="Edge remote-debugging port (default: 9222)")
+    launch_parser = subparsers.add_parser(
+        "launch-edge", help="open the dedicated debug Edge window for M365 Copilot"
+    )
+    launch_parser.add_argument(
+        "--cdp-port",
+        type=int,
+        default=9222,
+        help="Edge remote-debugging port (default: 9222)",
+    )
     launch_parser.set_defaults(func=launch_edge_command)
 
-    serve_parser = subparsers.add_parser("serve", help="start the proxy server (default when no command is given)")
-    serve_parser.add_argument("--host", default="127.0.0.1", help="listen address (default: 127.0.0.1)")
-    serve_parser.add_argument("--port", type=int, default=8000, help="listen port (default: 8000)")
-    serve_parser.add_argument("--cdp-port", type=int, default=9222, help="Edge remote-debugging port (default: 9222)")
-    serve_parser.add_argument("--no-auto-refresh", action="store_true", help="disable automatic token refresh")
-    serve_parser.add_argument("--no-launch-edge", action="store_true", help="don't open a debug Edge window on start")
-    serve_parser.add_argument("--no-capture-on-start", action="store_true", help="don't capture a token at startup")
-    serve_parser.add_argument("--capture-timeout-seconds", type=int, default=180, help="startup token-capture timeout (default: 180)")
+    serve_parser = subparsers.add_parser(
+        "serve", help="start the proxy server (default when no command is given)"
+    )
     serve_parser.add_argument(
-        "--refresh-before-seconds", type=int,
+        "--host", default="127.0.0.1", help="listen address (default: 127.0.0.1)"
+    )
+    serve_parser.add_argument(
+        "--port", type=int, default=8000, help="listen port (default: 8000)"
+    )
+    serve_parser.add_argument(
+        "--cdp-port",
+        type=int,
+        default=9222,
+        help="Edge remote-debugging port (default: 9222)",
+    )
+    serve_parser.add_argument(
+        "--no-auto-refresh", action="store_true", help="disable automatic token refresh"
+    )
+    serve_parser.add_argument(
+        "--no-launch-edge",
+        action="store_true",
+        help="don't open a debug Edge window on start",
+    )
+    serve_parser.add_argument(
+        "--no-capture-on-start",
+        action="store_true",
+        help="don't capture a token at startup",
+    )
+    serve_parser.add_argument(
+        "--capture-timeout-seconds",
+        type=int,
+        default=180,
+        help="startup token-capture timeout (default: 180)",
+    )
+    serve_parser.add_argument(
+        "--refresh-before-seconds",
+        type=int,
         default=int(os.environ.get("M365_REFRESH_BEFORE", "900")),
         help="refresh the token this many seconds before expiry (default: 900 / env M365_REFRESH_BEFORE)",
     )
-    serve_parser.add_argument("--refresh-retry-seconds", type=int, default=60, help="wait between refresh retries (default: 60)")
     serve_parser.add_argument(
-        "--no-configure-clients", action="store_true",
+        "--refresh-retry-seconds",
+        type=int,
+        default=60,
+        help="wait between refresh retries (default: 60)",
+    )
+    serve_parser.add_argument(
+        "--no-configure-clients",
+        action="store_true",
         help="don't wire Claude Code/VS Code to the proxy on start (and don't undo on stop)",
     )
     serve_parser.set_defaults(func=serve_command)
 
     configure_parser = subparsers.add_parser(
-        "configure", help="wire Claude Code (global env) + VS Code (custom endpoint) to the proxy"
+        "configure",
+        help="wire Claude Code (global env) + VS Code (custom endpoint) to the proxy",
     )
-    configure_parser.add_argument("--undo", action="store_true", help="remove the proxy wiring instead of adding it")
+    configure_parser.add_argument(
+        "--undo",
+        action="store_true",
+        help="remove the proxy wiring instead of adding it",
+    )
     configure_parser.set_defaults(func=configure_command)
 
-    subparsers.add_parser("tray", help="open the tray app (default when double-clicked)").set_defaults(func=tray_command)
+    subparsers.add_parser(
+        "tray", help="open the tray app (default when double-clicked)"
+    ).set_defaults(func=tray_command)
 
     args = parser.parse_args()
     if not getattr(args, "command", None):
@@ -559,7 +673,12 @@ def launch_edge_command(args: argparse.Namespace) -> None:
 
 
 _DEFAULT_EDGE_PATH = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
-_LINUX_BROWSER_PRIORITY = ("chromium", "chromium-browser", "google-chrome", "microsoft-edge")
+_LINUX_BROWSER_PRIORITY = (
+    "chromium",
+    "chromium-browser",
+    "google-chrome",
+    "microsoft-edge",
+)
 
 
 def _resolve_debug_browser_path() -> str:
@@ -595,8 +714,15 @@ async def _cdp_reload_m365(ws_url: str) -> None:
     """Navigate an already-open debug tab back to the Copilot chat, forcing a fresh page load so a
     new substrate WebSocket (carrying the access token) is created for capture."""
     async with websockets.connect(ws_url) as ws:
-        await ws.send(json.dumps({"id": 1, "method": "Page.navigate",
-                                  "params": {"url": "https://m365.cloud.microsoft/chat"}}))
+        await ws.send(
+            json.dumps(
+                {
+                    "id": 1,
+                    "method": "Page.navigate",
+                    "params": {"url": "https://m365.cloud.microsoft/chat"},
+                }
+            )
+        )
         await asyncio.wait_for(ws.recv(), timeout=5)
 
 
@@ -609,10 +735,14 @@ def _launch_debug_edge(cdp_port: int) -> None:
     if page is not None and page.get("webSocketDebuggerUrl"):
         try:
             asyncio.run(_cdp_reload_m365(page["webSocketDebuggerUrl"]))
-            print(f"Edge already open; reloaded the M365 tab on port {cdp_port} to refresh the substrate token.")
+            print(
+                f"Edge already open; reloaded the M365 tab on port {cdp_port} to refresh the substrate token."
+            )
             return
         except Exception as exc:
-            print(f"  ! could not reload the existing M365 tab ({exc}); opening a fresh window.")
+            print(
+                f"  ! could not reload the existing M365 tab ({exc}); opening a fresh window."
+            )
 
     edge_path = _resolve_debug_browser_path()
     profile_dir = _debug_browser_profile_dir(edge_path)
@@ -623,7 +753,12 @@ def _launch_debug_edge(cdp_port: int) -> None:
         f"--user-data-dir={profile_dir}",
         "--no-first-run",
     ]
-    headless = (os.environ.get("M365_EDGE_HEADLESS") or "").strip().lower() in ("1", "true", "yes", "on")
+    headless = (os.environ.get("M365_EDGE_HEADLESS") or "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
     if headless:
         # Invisible refresh — works only if the profile is already signed in and the tenant
         # does not require interactive WAM re-auth. First sign-in must be done non-headless.
@@ -634,22 +769,30 @@ def _launch_debug_edge(cdp_port: int) -> None:
     # WebSocket, which only opens when the chat actually loads/interacts, so the window must be usable.
     flags = 0x00000008 | 0x01000000 | 0x00000200 if os.name == "nt" else 0
     subprocess.Popen(argv, creationflags=flags, close_fds=True)
-    print(f"Edge launched ({'headless' if headless else 'visible'}) with remote debugging on port {cdp_port}.")
+    print(
+        f"Edge launched ({'headless' if headless else 'visible'}) with remote debugging on port {cdp_port}."
+    )
     print(f"Dedicated Edge profile: {profile_dir}")
     print("Sign in to M365 Copilot in that window once, then retry refresh.")
 
 
 def set_token_command(_args) -> None:
-    print("Paste the full WebSocket URL (or just the access_token value), then press Enter:")
+    print(
+        "Paste the full WebSocket URL (or just the access_token value), then press Enter:"
+    )
     raw = input().strip()
     match = re.search(r"access_token=([^&\s]+)", raw)
     token = match.group(1) if match else raw
     if not token.startswith("eyJ"):
-        print("Error: could not find a valid token. Make sure you copied the full WebSocket URL.")
+        print(
+            "Error: could not find a valid token. Make sure you copied the full WebSocket URL."
+        )
         return
     if not _is_substrate_token(token):
         print("Error: token is not a substrate.office.com WebSocket token.")
-        print("Copy the full wss://substrate.office.com/... URL from the Network WebSocket request.")
+        print(
+            "Copy the full wss://substrate.office.com/... URL from the Network WebSocket request."
+        )
         return
     _write_token(token)
     print(".env updated.")
@@ -657,8 +800,12 @@ def set_token_command(_args) -> None:
 
 def capture_token_command(args: argparse.Namespace) -> None:
     print("Listening for a Substrate WebSocket token...")
-    print("In the debug Edge M365 Copilot tab, click the message box and type one character. Do not need to send.")
-    token = asyncio.run(_cdp_capture_websocket_token(args.cdp_port, args.timeout_seconds))
+    print(
+        "In the debug Edge M365 Copilot tab, click the message box and type one character. Do not need to send."
+    )
+    token = asyncio.run(
+        _cdp_capture_websocket_token(args.cdp_port, args.timeout_seconds)
+    )
     if not token:
         print("Error: no Substrate WebSocket token captured before timeout.")
         return
@@ -706,11 +853,15 @@ def _configure_clients(undo: bool, base_url: str = "http://127.0.0.1:8000") -> N
         else:
             data.pop("env", None)
         _CLAUDE_SETTINGS.parent.mkdir(parents=True, exist_ok=True)
-        _CLAUDE_SETTINGS.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        _CLAUDE_SETTINGS.write_text(
+            json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
         if undo:
             print(f"  - Claude Code: removed proxy env from {_CLAUDE_SETTINGS}")
         else:
-            print(f"  + Claude Code: ANTHROPIC_BASE_URL={base_url} -> {_CLAUDE_SETTINGS}")
+            print(
+                f"  + Claude Code: ANTHROPIC_BASE_URL={base_url} -> {_CLAUDE_SETTINGS}"
+            )
     except Exception as exc:  # never let config wiring break serve
         print(f"  ! Claude settings not updated: {exc}")
 
@@ -721,10 +872,21 @@ def _configure_clients(undo: bool, base_url: str = "http://127.0.0.1:8000") -> N
             arr = _load_json(vs, [])
             if not isinstance(arr, list):
                 arr = []
-            ep = next((e for e in arr if isinstance(e, dict) and e.get("vendor") == "customendpoint"), None)
+            ep = next(
+                (
+                    e
+                    for e in arr
+                    if isinstance(e, dict) and e.get("vendor") == "customendpoint"
+                ),
+                None,
+            )
             if undo:
                 if ep is not None:
-                    ep["models"] = [m for m in ep.get("models", []) if m.get("id") != _VSCODE_MODEL_ID]
+                    ep["models"] = [
+                        m
+                        for m in ep.get("models", [])
+                        if m.get("id") != _VSCODE_MODEL_ID
+                    ]
                     if not ep["models"]:
                         arr = [e for e in arr if e is not ep]
             else:
@@ -738,12 +900,24 @@ def _configure_clients(undo: bool, base_url: str = "http://127.0.0.1:8000") -> N
                     "maxOutputTokens": 16000,
                 }
                 if ep is None:
-                    arr.append({"name": "Custom Endpoint", "vendor": "customendpoint", "models": [model]})
+                    arr.append(
+                        {
+                            "name": "Custom Endpoint",
+                            "vendor": "customendpoint",
+                            "models": [model],
+                        }
+                    )
                 else:
-                    models = [m for m in ep.get("models", []) if m.get("id") != _VSCODE_MODEL_ID]
+                    models = [
+                        m
+                        for m in ep.get("models", [])
+                        if m.get("id") != _VSCODE_MODEL_ID
+                    ]
                     models.append(model)
                     ep["models"] = models
-            vs.write_text(json.dumps(arr, indent=2, ensure_ascii=False), encoding="utf-8")
+            vs.write_text(
+                json.dumps(arr, indent=2, ensure_ascii=False), encoding="utf-8"
+            )
             if undo:
                 print(f"  - VS Code: removed model {_VSCODE_MODEL_ID} from {vs}")
             else:
@@ -881,7 +1055,9 @@ def _run_server(args: argparse.Namespace) -> None:
         if action == "refresh":
             print("Refreshing token...")
             if not _try_auto_refresh(cdp_port):
-                print("Auto-refresh failed (Edge not running with --remote-debugging-port).")
+                print(
+                    "Auto-refresh failed (Edge not running with --remote-debugging-port)."
+                )
                 print("Falling back to manual mode.")
                 set_token_command(None)
             print("Restarting server...")

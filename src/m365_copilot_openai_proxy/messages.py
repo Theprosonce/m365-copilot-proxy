@@ -6,6 +6,7 @@ Resolution order for a key:
 
 Values support {name}/{begin}/{end} placeholders (Python str.format) and \\n \\t \\\\ \\uXXXX escapes.
 """
+
 from __future__ import annotations
 
 import os
@@ -26,7 +27,11 @@ def _unescape(value: str) -> str:
         ch = value[i]
         if ch == "\\" and i + 1 < len(value):
             nxt = value[i + 1]
-            out.append({"n": "\n", "t": "\t", "r": "\r", "\\": "\\", "=": "=", ":": ":"}.get(nxt, nxt))
+            out.append(
+                {"n": "\n", "t": "\t", "r": "\r", "\\": "\\", "=": "=", ":": ":"}.get(
+                    nxt, nxt
+                )
+            )
             i += 2
             continue
         out.append(ch)
@@ -52,7 +57,7 @@ def _parse_properties(text: str) -> dict[str, str]:
         if not m:
             continue
         key = line[: m.start()].strip()
-        val = line[m.end():].lstrip(" \t")
+        val = line[m.end() :].lstrip(" \t")
         if key:
             props[_unescape(key)] = _unescape(val)
     return props
@@ -64,7 +69,11 @@ def _catalog() -> dict[str, str]:
     if override:
         text = Path(override).read_text(encoding="utf-8")
     else:
-        text = resources.files(__package__).joinpath("messages.properties").read_text(encoding="utf-8")
+        text = (
+            resources.files(__package__)
+            .joinpath("messages.properties")
+            .read_text(encoding="utf-8")
+        )
     return _parse_properties(text)
 
 

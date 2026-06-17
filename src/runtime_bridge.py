@@ -18,11 +18,17 @@ class SandboxError(ToolError):
 
 
 def resolve_and_sandbox_path(root: Path, path: str) -> Path:
-    target = (root / path).resolve() if not Path(path).is_absolute() else Path(path).resolve()
+    target = (
+        (root / path).resolve()
+        if not Path(path).is_absolute()
+        else Path(path).resolve()
+    )
     try:
         target.relative_to(root)
     except ValueError as exc:
-        raise SandboxError(f"Access denied: path {path} is outside project root") from exc
+        raise SandboxError(
+            f"Access denied: path {path} is outside project root"
+        ) from exc
     return target
 
 
@@ -30,7 +36,9 @@ def _safe_rel(root: Path, path: Path) -> str:
     return str(path.relative_to(root)).replace("\\", "/")
 
 
-def tool_glob(root: Path, args: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+def tool_glob(
+    root: Path, args: dict[str, Any]
+) -> tuple[dict[str, Any], dict[str, Any]]:
     pattern = args.get("pattern")
     if not isinstance(pattern, str) or not pattern:
         raise ToolError("Missing 'pattern' argument")
@@ -39,7 +47,9 @@ def tool_glob(root: Path, args: dict[str, Any]) -> tuple[dict[str, Any], dict[st
     return ({"matches": matches, "count": len(matches)}, {"pattern": pattern})
 
 
-def tool_list(root: Path, args: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+def tool_list(
+    root: Path, args: dict[str, Any]
+) -> tuple[dict[str, Any], dict[str, Any]]:
     path = args.get("path", ".")
     if not isinstance(path, str):
         raise ToolError("'path' must be a string")
@@ -50,11 +60,22 @@ def tool_list(root: Path, args: dict[str, Any]) -> tuple[dict[str, Any], dict[st
         raise ToolError(f"Path is not a directory: {path}")
     entries = []
     for entry in sorted(target.iterdir(), key=lambda p: p.name.lower()):
-        entries.append({"name": entry.name, "is_dir": entry.is_dir(), "size": entry.stat().st_size if entry.exists() else 0})
-    return ({"entries": entries, "count": len(entries)}, {"path": _safe_rel(root, target)})
+        entries.append(
+            {
+                "name": entry.name,
+                "is_dir": entry.is_dir(),
+                "size": entry.stat().st_size if entry.exists() else 0,
+            }
+        )
+    return (
+        {"entries": entries, "count": len(entries)},
+        {"path": _safe_rel(root, target)},
+    )
 
 
-def tool_read(root: Path, args: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+def tool_read(
+    root: Path, args: dict[str, Any]
+) -> tuple[dict[str, Any], dict[str, Any]]:
     path = args.get("path")
     if not isinstance(path, str) or not path:
         raise ToolError("Missing 'path' argument")
@@ -88,7 +109,9 @@ def tool_read(root: Path, args: dict[str, Any]) -> tuple[dict[str, Any], dict[st
     )
 
 
-def tool_search(root: Path, args: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+def tool_search(
+    root: Path, args: dict[str, Any]
+) -> tuple[dict[str, Any], dict[str, Any]]:
     query = args.get("query")
     if not isinstance(query, str) or not query:
         raise ToolError("Missing 'query' argument")
@@ -117,10 +140,15 @@ def tool_search(root: Path, args: dict[str, Any]) -> tuple[dict[str, Any], dict[
         if hit_lines:
             matches.append({"path": _safe_rel(root, candidate), "lines": hit_lines})
 
-    return ({"matches": matches, "count": len(matches)}, {"path": _safe_rel(root, target), "query": query})
+    return (
+        {"matches": matches, "count": len(matches)},
+        {"path": _safe_rel(root, target), "query": query},
+    )
 
 
-def tool_write(root: Path, args: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+def tool_write(
+    root: Path, args: dict[str, Any]
+) -> tuple[dict[str, Any], dict[str, Any]]:
     path = args.get("path")
     content = args.get("content")
     if not isinstance(path, str) or not path:
@@ -137,12 +165,18 @@ def tool_write(root: Path, args: dict[str, Any]) -> tuple[dict[str, Any], dict[s
     )
 
 
-def tool_edit(root: Path, args: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+def tool_edit(
+    root: Path, args: dict[str, Any]
+) -> tuple[dict[str, Any], dict[str, Any]]:
     path = args.get("path")
     old_string = args.get("old_string")
     new_string = args.get("new_string")
     replace_all = args.get("replace_all", False)
-    if not isinstance(path, str) or not isinstance(old_string, str) or not isinstance(new_string, str):
+    if (
+        not isinstance(path, str)
+        or not isinstance(old_string, str)
+        or not isinstance(new_string, str)
+    ):
         raise ToolError("Missing 'path', 'old_string', or 'new_string' argument")
     if not isinstance(replace_all, bool):
         raise ToolError("'replace_all' must be a boolean")
@@ -158,12 +192,18 @@ def tool_edit(root: Path, args: dict[str, Any]) -> tuple[dict[str, Any], dict[st
     target.write_text(updated, encoding="utf-8")
 
     return (
-        {"success": True, "path_changed": _safe_rel(root, target), "replacements": count},
+        {
+            "success": True,
+            "path_changed": _safe_rel(root, target),
+            "replacements": count,
+        },
         {"affected_paths": [_safe_rel(root, target)], "replacements": count},
     )
 
 
-def tool_bash(root: Path, args: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+def tool_bash(
+    root: Path, args: dict[str, Any]
+) -> tuple[dict[str, Any], dict[str, Any]]:
     command = args.get("command")
     timeout = args.get("timeout", 10)
     workdir = args.get("workdir", ".")
@@ -266,17 +306,26 @@ class RuntimeBridge:
         if isinstance(call, dict) and "error" in call and call.get("status") == "error":
             return call
         if not isinstance(call, dict):
-            return self._error("validation_error", "Each tool call entry must be an object")
+            return self._error(
+                "validation_error", "Each tool call entry must be an object"
+            )
 
         name = call.get("name")
         if not isinstance(name, str) or not name:
             return self._error("validation_error", "Missing tool name")
         arguments = call.get("arguments")
         if not isinstance(arguments, dict):
-            return self._error("validation_error", "Arguments must be an object", name=name)
+            return self._error(
+                "validation_error", "Arguments must be an object", name=name
+            )
         tool = TOOLS.get(name)
         if tool is None:
-            return self._error("unknown_tool", f"Tool '{name}' is not supported", name=name, arguments=arguments)
+            return self._error(
+                "unknown_tool",
+                f"Tool '{name}' is not supported",
+                name=name,
+                arguments=arguments,
+            )
 
         try:
             output, meta = tool(self.root, arguments)
@@ -290,20 +339,32 @@ class RuntimeBridge:
                 "metadata": meta,
             }
         except SandboxError as exc:
-            return self._error("sandbox_error", str(exc), name=name, arguments=arguments)
+            return self._error(
+                "sandbox_error", str(exc), name=name, arguments=arguments
+            )
         except ToolError as exc:
-            return self._error("validation_error", str(exc), name=name, arguments=arguments)
+            return self._error(
+                "validation_error", str(exc), name=name, arguments=arguments
+            )
         except Exception as exc:
-            return self._error("execution_error", str(exc), name=name, arguments=arguments)
+            return self._error(
+                "execution_error", str(exc), name=name, arguments=arguments
+            )
 
-    def format_tool_result_message(self, results: list[dict[str, Any]]) -> dict[str, Any]:
+    def format_tool_result_message(
+        self, results: list[dict[str, Any]]
+    ) -> dict[str, Any]:
         return {
             "role": "tool_result",
             "name": "runtime_bridge",
-            "content": json.dumps({"type": "tool_result", "results": results}, ensure_ascii=False),
+            "content": json.dumps(
+                {"type": "tool_result", "results": results}, ensure_ascii=False
+            ),
         }
 
-    def inject_tool_result(self, conversation: list[dict[str, Any]], assistant_message: str) -> bool:
+    def inject_tool_result(
+        self, conversation: list[dict[str, Any]], assistant_message: str
+    ) -> bool:
         results = self.process_assistant_message(assistant_message)
         if results is None:
             return False
@@ -311,7 +372,12 @@ class RuntimeBridge:
         return True
 
     def _append_tool_result(self, results: list[dict[str, Any]]) -> None:
-        self.conversation_history.append({"role": "tool_result", "content": json.dumps(results, indent=2, ensure_ascii=False)})
+        self.conversation_history.append(
+            {
+                "role": "tool_result",
+                "content": json.dumps(results, indent=2, ensure_ascii=False),
+            }
+        )
 
     @staticmethod
     def _error(

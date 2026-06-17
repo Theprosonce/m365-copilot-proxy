@@ -9,7 +9,8 @@ from pydantic import BaseModel, ConfigDict, Field
 @dataclass(frozen=True)
 class ExtractedImage:
     """An inline image pulled from a request, ready to upload to substrate."""
-    data_uri: str   # data:image/<type>;base64,<...>
+
+    data_uri: str  # data:image/<type>;base64,<...>
     file_type: str  # e.g. "png", "jpg"
     file_name: str  # e.g. "image.png"
 
@@ -31,6 +32,7 @@ class MessageAnnotation(TypedDict):
 class UploadFileResponse(TypedDict, total=False):
     """Substrate /m365Copilot/UploadFile JSON response (captured). `docId` is the only
     field we consume — it becomes the `messageAnnotations[].id` referencing the image."""
+
     docId: str
     fileName: str
     fileType: str
@@ -92,6 +94,8 @@ class OpenAIChatRequest(BaseModel):
     user: str | None = None
     tools: list[dict[str, Any]] | None = None
     tool_choice: Any | None = None
+    functions: list[dict[str, Any]] | None = None
+    function_call: Any | None = None
 
 
 class AnthropicMessage(BaseModel):
@@ -145,8 +149,10 @@ class TranslatedRequest(BaseModel):
 
 # --- Session-store CRUD API ---
 
+
 class ChatInfo(BaseModel):
     """A tracked conversation mapping (proxy key -> substrate conversation)."""
+
     key: str
     conversation_id: str
     client_session_id: str

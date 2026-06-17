@@ -17,7 +17,7 @@ def temp_workspace(tmp_path: Path) -> Path:
 
 def test_valid_tool_call_glob(temp_workspace: Path) -> None:
     bridge = RuntimeBridge(str(temp_workspace))
-    message = f"I will search now.\n{_BEGIN}\n[{{\"name\": \"glob\", \"arguments\": {{\"pattern\": \"**/*\"}}}}]\n{_END}\n"
+    message = f'I will search now.\n{_BEGIN}\n[{{"name": "glob", "arguments": {{"pattern": "**/*"}}}}]\n{_END}\n'
 
     results = bridge.process_assistant_message(message)
 
@@ -43,7 +43,7 @@ def test_invalid_json(temp_workspace: Path) -> None:
 
 def test_unknown_tool(temp_workspace: Path) -> None:
     bridge = RuntimeBridge(str(temp_workspace))
-    message = f"{_BEGIN}[{{\"name\":\"missing\",\"arguments\":{{}}}}]{_END}"
+    message = f'{_BEGIN}[{{"name":"missing","arguments":{{}}}}]{_END}'
 
     results = bridge.process_assistant_message(message)
 
@@ -53,7 +53,7 @@ def test_unknown_tool(temp_workspace: Path) -> None:
 
 def test_invalid_args(temp_workspace: Path) -> None:
     bridge = RuntimeBridge(str(temp_workspace))
-    message = f"{_BEGIN}[{{\"name\":\"glob\",\"arguments\":[]}}]{_END}"
+    message = f'{_BEGIN}[{{"name":"glob","arguments":[]}}]{_END}'
 
     results = bridge.process_assistant_message(message)
 
@@ -63,7 +63,7 @@ def test_invalid_args(temp_workspace: Path) -> None:
 
 def test_tool_execution_failure(temp_workspace: Path) -> None:
     bridge = RuntimeBridge(str(temp_workspace))
-    message = f"{_BEGIN}[{{\"name\":\"read\",\"arguments\":{{\"path\":\"nope.txt\"}}}}]{_END}"
+    message = f'{_BEGIN}[{{"name":"read","arguments":{{"path":"nope.txt"}}}}]{_END}'
 
     results = bridge.process_assistant_message(message)
 
@@ -76,7 +76,7 @@ def test_partial_file_read(temp_workspace: Path) -> None:
     large_file = temp_workspace / "large.txt"
     large_file.write_text("x" * 100, encoding="utf-8")
     bridge = RuntimeBridge(str(temp_workspace))
-    message = f"{_BEGIN}[{{\"name\":\"read\",\"arguments\":{{\"path\":\"large.txt\",\"limit\":10}}}}]{_END}"
+    message = f'{_BEGIN}[{{"name":"read","arguments":{{"path":"large.txt","limit":10}}}}]{_END}'
 
     results = bridge.process_assistant_message(message)
 
@@ -88,7 +88,7 @@ def test_partial_file_read(temp_workspace: Path) -> None:
 
 def test_multiple_tool_calls(temp_workspace: Path) -> None:
     bridge = RuntimeBridge(str(temp_workspace))
-    message = f"{_BEGIN}\n[{{\"name\":\"glob\",\"arguments\":{{\"pattern\":\"*.txt\"}}}},{{\"name\":\"bash\",\"arguments\":{{\"command\":\"echo hi\"}}}}]\n{_END}"
+    message = f'{_BEGIN}\n[{{"name":"glob","arguments":{{"pattern":"*.txt"}}}},{{"name":"bash","arguments":{{"command":"echo hi"}}}}]\n{_END}'
 
     results = bridge.process_assistant_message(message)
 
@@ -109,7 +109,7 @@ def test_no_tool_call_message(temp_workspace: Path) -> None:
 
 def test_regression_no_reprompt_without_result(temp_workspace: Path) -> None:
     bridge = RuntimeBridge(str(temp_workspace))
-    message = f"{_BEGIN}[{{\"name\":\"glob\",\"arguments\":{{\"pattern\":\"**/*\"}}}}]{_END}"
+    message = f'{_BEGIN}[{{"name":"glob","arguments":{{"pattern":"**/*"}}}}]{_END}'
 
     results = bridge.process_assistant_message(message)
 
@@ -124,7 +124,7 @@ def test_end_to_end_loop_tools_then_continue(temp_workspace: Path) -> None:
     def fake_assistant(history: list[dict[str, str]]) -> str:
         if any(m.get("role") == "tool_result" for m in history):
             return "I received tool results and can continue."
-        return f"{_BEGIN}[{{\"name\":\"glob\",\"arguments\":{{\"pattern\":\"**/*\"}}}}]{_END}"
+        return f'{_BEGIN}[{{"name":"glob","arguments":{{"pattern":"**/*"}}}}]{_END}'
 
     first_reply = fake_assistant(bridge.conversation_history)
     first_results = bridge.process_assistant_message(first_reply)

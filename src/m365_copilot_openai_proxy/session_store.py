@@ -41,7 +41,12 @@ class PersistentSessionStore:
     """Maps a key -> PersistentSession. When db_path is given, the conversation mapping is
     persisted to SQLite so chats survive proxy restarts; otherwise it is purely in-memory."""
 
-    def __init__(self, db_path: str | None = None, max_sessions: int = 0, ttl_seconds: float = 0.0):
+    def __init__(
+        self,
+        db_path: str | None = None,
+        max_sessions: int = 0,
+        ttl_seconds: float = 0.0,
+    ):
         self._lock = threading.RLock()
         self._cache: dict[str, PersistentSession] = {}
         self._db_path = str(db_path) if db_path else None
@@ -77,7 +82,11 @@ class PersistentSessionStore:
         # dropping it here would split that chat onto a fresh substrate conversation.
         if self._ttl > 0:
             cutoff = now - self._ttl
-            for k in [k for k, s in self._cache.items() if s.last_used < cutoff and not s.lock.locked()]:
+            for k in [
+                k
+                for k, s in self._cache.items()
+                if s.last_used < cutoff and not s.lock.locked()
+            ]:
                 self._cache.pop(k, None)
         if self._max > 0 and len(self._cache) > self._max:
             evictable = sorted(
@@ -91,7 +100,9 @@ class PersistentSessionStore:
             self._last_db_prune = now
             with sqlite3.connect(self._db_path) as conn:
                 if self._ttl > 0:
-                    conn.execute("DELETE FROM sessions WHERE last_used < ?", (now - self._ttl,))
+                    conn.execute(
+                        "DELETE FROM sessions WHERE last_used < ?", (now - self._ttl,)
+                    )
                 if self._max > 0:
                     conn.execute(
                         "DELETE FROM sessions WHERE key NOT IN "
@@ -188,5 +199,13 @@ class PersistentSessionStore:
                 "INSERT OR REPLACE INTO sessions "
                 "(key, conversation_id, client_session_id, created_at, last_used, turn_count, label) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (key, s.conversation_id, s.client_session_id, s.created_at, s.last_used, s.turn_count, s.label),
+                (
+                    key,
+                    s.conversation_id,
+                    s.client_session_id,
+                    s.created_at,
+                    s.last_used,
+                    s.turn_count,
+                    s.label,
+                ),
             )

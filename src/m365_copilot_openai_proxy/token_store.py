@@ -57,7 +57,9 @@ class AccessTokenStore:
         seconds_remaining = max(0, expires_at - int(now))
         return {
             "valid": seconds_remaining > 0,
-            "expires_at": datetime.fromtimestamp(expires_at, tz=timezone.utc).isoformat(),
+            "expires_at": datetime.fromtimestamp(
+                expires_at, tz=timezone.utc
+            ).isoformat(),
             "seconds_remaining": seconds_remaining,
         }
 

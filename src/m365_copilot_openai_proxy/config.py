@@ -39,7 +39,9 @@ class Settings(BaseSettings):
     # handshake). Default off until validated against substrate (see Workstream A).
     ws_reuse: bool = Field(default=False, alias="M365_WS_REUSE")
     # True -> automatically close/hide the debug browser window when a token is successfully acquired.
-    hide_on_token_success: bool = Field(default=True, alias="M365_HIDE_ON_TOKEN_SUCCESS")
+    hide_on_token_success: bool = Field(
+        default=True, alias="M365_HIDE_ON_TOKEN_SUCCESS"
+    )
     # Path to the Edge executable used for the debug token-capture window.
     edge_path: str = Field(
         default=r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
@@ -47,11 +49,92 @@ class Settings(BaseSettings):
     )
     # Passthrough: models NOT recognized as ours (m365-*) are forwarded to the real Anthropic API
     # on /v1/messages, instead of being routed to substrate. Off by default.
-    anthropic_passthrough: bool = Field(default=False, alias="M365_ANTHROPIC_PASSTHROUGH")
-    anthropic_upstream: str = Field(default="https://api.anthropic.com", alias="M365_ANTHROPIC_UPSTREAM")
+    anthropic_passthrough: bool = Field(
+        default=False, alias="M365_ANTHROPIC_PASSTHROUGH"
+    )
+    anthropic_upstream: str = Field(
+        default="https://api.anthropic.com", alias="M365_ANTHROPIC_UPSTREAM"
+    )
     anthropic_version: str = Field(default="2023-06-01", alias="M365_ANTHROPIC_VERSION")
     # OAuth credential source (default): the Claude Code login file. Free (uses the subscription).
     anthropic_creds_file: str = Field(default="", alias="M365_ANTHROPIC_CREDS")
     # API-key override: if set, passthrough uses x-api-key with this key (consumes API credits)
     # instead of the OAuth subscription token.
     anthropic_key: str = Field(default="", alias="M365_ANTHROPIC_KEY")
+
+    # Tool Emulation Policy
+    tool_emulation_enabled: bool = Field(
+        default=True, alias="M365_TOOL_EMULATION_ENABLED"
+    )
+    tool_emulation_emulate_when_capability_unknown: bool = Field(
+        default=False, alias="M365_TOOL_EMULATION_UNKNOWN"
+    )
+    tool_emulation_native_passthrough: bool = Field(
+        default=True, alias="M365_TOOL_EMULATION_NATIVE_PASSTHROUGH"
+    )
+    tool_emulation_mode: str = Field(
+        default="response_only", alias="M365_TOOL_EMULATION_MODE"
+    )
+    tool_emulation_prompt_template_version: str = Field(
+        default="v1", alias="M365_TOOL_EMULATION_PROMPT_VERSION"
+    )
+    tool_emulation_max_tools_in_prompt: int = Field(
+        default=8, alias="M365_TOOL_EMULATION_MAX_TOOLS"
+    )
+    tool_emulation_max_tool_schema_chars: int = Field(
+        default=12000, alias="M365_TOOL_EMULATION_MAX_SCHEMA"
+    )
+    tool_emulation_max_single_tool_schema_chars: int = Field(
+        default=3000, alias="M365_TOOL_EMULATION_MAX_SINGLE_SCHEMA"
+    )
+    tool_emulation_compact_schema: bool = Field(
+        default=True, alias="M365_TOOL_EMULATION_COMPACT_SCHEMA"
+    )
+    tool_emulation_cache_rendered_tool_prompts: bool = Field(
+        default=True, alias="M365_TOOL_EMULATION_CACHE_PROMPTS"
+    )
+    tool_emulation_force_non_streaming: bool = Field(
+        default=True, alias="M365_TOOL_EMULATION_FORCE_NON_STREAMING"
+    )
+    tool_emulation_override_temperature: bool = Field(
+        default=False, alias="M365_TOOL_EMULATION_OVERRIDE_TEMP"
+    )
+    tool_emulation_default_temperature: float = Field(
+        default=0.0, alias="M365_TOOL_EMULATION_DEFAULT_TEMP"
+    )
+    tool_emulation_parser_mode: str = Field(
+        default="delimiter_first", alias="M365_TOOL_EMULATION_PARSER_MODE"
+    )
+    tool_emulation_allow_plain_json: bool = Field(
+        default=True, alias="M365_TOOL_EMULATION_ALLOW_PLAIN_JSON"
+    )
+    tool_emulation_allow_markdown_json_recovery: bool = Field(
+        default=True, alias="M365_TOOL_EMULATION_ALLOW_MARKDOWN_RECOVERY"
+    )
+    tool_emulation_allow_loose_json_recovery: bool = Field(
+        default=False, alias="M365_TOOL_EMULATION_ALLOW_LOOSE_RECOVERY"
+    )
+    tool_emulation_max_parse_chars: int = Field(
+        default=20000, alias="M365_TOOL_EMULATION_MAX_PARSE_CHARS"
+    )
+    tool_emulation_validate_schema: bool = Field(
+        default=True, alias="M365_TOOL_EMULATION_VALIDATE_SCHEMA"
+    )
+    tool_emulation_repair_invalid_tool_call_once: bool = Field(
+        default=True, alias="M365_TOOL_EMULATION_REPAIR_ONCE"
+    )
+    tool_emulation_max_agent_iterations: int = Field(
+        default=1, alias="M365_TOOL_EMULATION_MAX_ITERATIONS"
+    )
+    tool_emulation_max_total_tool_calls: int = Field(
+        default=3, alias="M365_TOOL_EMULATION_MAX_TOTAL_CALLS"
+    )
+    tool_emulation_prevent_repeated_tool_calls: bool = Field(
+        default=True, alias="M365_TOOL_EMULATION_PREVENT_REPEAT"
+    )
+    tool_emulation_execution_enabled: bool = Field(
+        default=False, alias="M365_TOOL_EMULATION_EXECUTION_ENABLED"
+    )
+    tool_emulation_execution_sandbox: bool = Field(
+        default=True, alias="M365_TOOL_EMULATION_EXECUTION_SANDBOX"
+    )

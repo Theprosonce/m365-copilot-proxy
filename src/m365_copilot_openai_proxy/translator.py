@@ -12,6 +12,7 @@ from .models import (
     ContentPart,
     ExtractedImage,
     OpenAIChatRequest,
+    OpenAIResponsesRequest,
     TranslatedRequest,
 )
 from .tool_shim import looks_like_bypass
@@ -54,7 +55,11 @@ def extract_images(content: str | list[ContentPart] | None) -> list[ExtractedIma
                 data_uri = f"data:{mime};base64,{src['data']}"
         if data_uri:
             ext = _mime_to_ext(mime)
-            images.append(ExtractedImage(data_uri=data_uri, file_type=ext, file_name=f"image.{ext}"))
+            images.append(
+                ExtractedImage(
+                    data_uri=data_uri, file_type=ext, file_name=f"image.{ext}"
+                )
+            )
     return images
 
 
@@ -73,6 +78,7 @@ def extract_file_attachments(text: str) -> list[ExtractedImage]:
     if not text or "image:file://" not in text:
         return []
     import os
+
     out: list[ExtractedImage] = []
     for m in _ATTACHMENT_RE.finditer(text):
         parsed_path = unquote(urlparse(m.group(1)).path)
@@ -88,11 +94,13 @@ def extract_file_attachments(text: str) -> list[ExtractedImage]:
             continue
         mime = "image/jpeg" if ext == "jpg" else f"image/{ext}"
         b64 = base64.b64encode(data).decode("ascii")
-        out.append(ExtractedImage(
-            data_uri=f"data:{mime};base64,{b64}",
-            file_type=_mime_to_ext(mime),
-            file_name=path.name,
-        ))
+        out.append(
+            ExtractedImage(
+                data_uri=f"data:{mime};base64,{b64}",
+                file_type=_mime_to_ext(mime),
+                file_name=path.name,
+            )
+        )
     return out
 
 
@@ -124,8 +132,12 @@ def translate_openai_request(request: OpenAIChatRequest) -> TranslatedRequest:
                 system_lines.append(text)
         elif message.role == "assistant":
             if message.tool_calls:
-                transcript_lines.append(f"Assistant (tool call): {_summarize_tool_calls(message.tool_calls)}")
-            if text and not looks_like_bypass(text):  # drop prior refusals so they don't reinforce
+                transcript_lines.append(
+                    f"Assistant (tool call): {_summarize_tool_calls(message.tool_calls)}"
+                )
+            if text and not looks_like_bypass(
+                text
+            ):  # drop prior refusals so they don't reinforce
                 transcript_lines.append(f"Assistant: {text}")
         elif message.role == "tool":
             ref = message.name or message.tool_call_id or "tool"
@@ -163,12 +175,13 @@ def translate_openai_request(request: OpenAIChatRequest) -> TranslatedRequest:
 
 
 def translate_responses_request(request: "OpenAIResponsesRequest") -> TranslatedRequest:
-    from .models import OpenAIResponsesRequest
     instructions = request.instructions or ""
     if isinstance(request.input, str):
         return TranslatedRequest(
             prompt=request.input,
-            additional_context=[f"System instructions:\n{instructions}"] if instructions else [],
+            additional_context=[f"System instructions:\n{instructions}"]
+            if instructions
+            else [],
         )
     # input is a list of message dicts
     system_lines: list[str] = []
@@ -181,7 +194,11 @@ def translate_responses_request(request: "OpenAIResponsesRequest") -> Translated
         role = item.get("role", "") if isinstance(item, dict) else ""
         content = item.get("content", "") if isinstance(item, dict) else str(item)
         if isinstance(content, list):
-            content = "".join(p.get("text", "") for p in content if isinstance(p, dict) and p.get("type") in ("text", "input_text"))
+            content = "".join(
+                p.get("text", "")
+                for p in content
+                if isinstance(p, dict) and p.get("type") in ("text", "input_text")
+            )
         text = content.strip()
         if not text:
             continue
@@ -191,7 +208,9 @@ def translate_responses_request(request: "OpenAIResponsesRequest") -> Translated
             continue
         if is_last:
             if role != "user":
-                raise ValueError("The final Responses input message must be a user message.")
+                raise ValueError(
+                    "The final Responses input message must be a user message."
+                )
             prompt = text
             continue
         transcript_lines.append(f"{role.capitalize()}: {text}")
@@ -216,7 +235,11 @@ def _tool_result_text(content: Any) -> str:
         parts = []
         for b in content:
             if isinstance(b, dict):
-                parts.append(b.get("text", "") if b.get("type") == "text" else json.dumps(b, ensure_ascii=False))
+                parts.append(
+                    b.get("text", "")
+                    if b.get("type") == "text"
+                    else json.dumps(b, ensure_ascii=False)
+                )
             else:
                 parts.append(str(b))
         return "\n".join(p for p in parts if p)
@@ -262,7 +285,9 @@ def translate_anthropic_request(
                 transcript_lines.append(f"Assistant (tool call): {part.name}({args})")
             elif part.type == "tool_result":
                 ref = part.tool_use_id or "tool"
-                transcript_lines.append(f"Tool result [{ref}]: {_tool_result_text(part.content)}")
+                transcript_lines.append(
+                    f"Tool result [{ref}]: {_tool_result_text(part.content)}"
+                )
         if role == "user" and user_text_parts:
             last_user_text = "\n".join(user_text_parts)
 

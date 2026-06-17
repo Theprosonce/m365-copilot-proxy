@@ -20,7 +20,10 @@ from m365_copilot_openai_proxy.cli import (
 )
 from m365_copilot_openai_proxy.config import Settings
 from m365_copilot_openai_proxy.session_store import PersistentSessionStore
-from m365_copilot_openai_proxy.substrate_client import SubstrateCopilotClient, SubstrateCopilotError
+from m365_copilot_openai_proxy.substrate_client import (
+    SubstrateCopilotClient,
+    SubstrateCopilotError,
+)
 
 
 class FakeCopilotClient:
@@ -104,7 +107,9 @@ def test_app_starts_without_token_for_startup_capture() -> None:
 
 def test_token_status_reports_expiry() -> None:
     settings = Settings(M365_ACCESS_TOKEN=make_jwt(int(time.time()) + 3600))
-    app = create_app(settings=settings, copilot_client_factory=lambda: FakeCopilotClient())
+    app = create_app(
+        settings=settings, copilot_client_factory=lambda: FakeCopilotClient()
+    )
     client = TestClient(app)
 
     response = client.get("/v1/token/status")
@@ -118,7 +123,9 @@ def test_token_status_reports_expiry() -> None:
 
 def test_healthz_includes_token_remaining_time() -> None:
     settings = Settings(M365_ACCESS_TOKEN=make_jwt(int(time.time()) + 3600))
-    app = create_app(settings=settings, copilot_client_factory=lambda: FakeCopilotClient())
+    app = create_app(
+        settings=settings, copilot_client_factory=lambda: FakeCopilotClient()
+    )
     client = TestClient(app)
 
     response = client.get("/healthz")
@@ -131,8 +138,12 @@ def test_healthz_includes_token_remaining_time() -> None:
 
 
 def test_token_status_rejects_non_substrate_token() -> None:
-    settings = Settings(M365_ACCESS_TOKEN=make_jwt(int(time.time()) + 3600, aud="394866fc-eedb"))
-    app = create_app(settings=settings, copilot_client_factory=lambda: FakeCopilotClient())
+    settings = Settings(
+        M365_ACCESS_TOKEN=make_jwt(int(time.time()) + 3600, aud="394866fc-eedb")
+    )
+    app = create_app(
+        settings=settings, copilot_client_factory=lambda: FakeCopilotClient()
+    )
     client = TestClient(app)
 
     response = client.get("/v1/token/status")
@@ -217,12 +228,16 @@ def test_cli_seconds_remaining_uses_jwt_exp() -> None:
 
 def test_cli_accepts_only_substrate_tokens() -> None:
     assert _is_substrate_token(make_jwt(int(time.time()) + 3600))
-    assert not _is_substrate_token(make_jwt(int(time.time()) + 3600, aud="394866fc-eedb"))
+    assert not _is_substrate_token(
+        make_jwt(int(time.time()) + 3600, aud="394866fc-eedb")
+    )
 
 
 def test_cli_knows_when_startup_capture_is_needed() -> None:
     assert _needs_substrate_token(None)
-    assert _needs_substrate_token(make_jwt(int(time.time()) + 3600, aud="394866fc-eedb"))
+    assert _needs_substrate_token(
+        make_jwt(int(time.time()) + 3600, aud="394866fc-eedb")
+    )
     assert _needs_substrate_token(make_jwt(int(time.time()) - 1))
     assert not _needs_substrate_token(make_jwt(int(time.time()) + 3600))
 
@@ -242,10 +257,17 @@ def test_cli_startup_refresh_can_do_full_fallback(monkeypatch) -> None:
         capture_called = True
         return False
 
-    monkeypatch.setattr("m365_copilot_openai_proxy.cli._wait_for_m365_page", lambda _port, _timeout: True)
+    monkeypatch.setattr(
+        "m365_copilot_openai_proxy.cli._wait_for_m365_page",
+        lambda _port, _timeout: True,
+    )
     monkeypatch.setattr("m365_copilot_openai_proxy.cli._try_auto_refresh", fake_refresh)
-    monkeypatch.setattr("m365_copilot_openai_proxy.cli._capture_token_to_env", fake_capture)
-    monkeypatch.setattr("m365_copilot_openai_proxy.cli.time.sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        "m365_copilot_openai_proxy.cli._capture_token_to_env", fake_capture
+    )
+    monkeypatch.setattr(
+        "m365_copilot_openai_proxy.cli.time.sleep", lambda _seconds: None
+    )
 
     _startup_capture_loop(9222, timeout_seconds=1)
 
@@ -287,7 +309,9 @@ def test_cli_finds_real_m365_page_not_devtools() -> None:
 
 
 def test_cli_linux_browser_priority_prefers_chromium(monkeypatch) -> None:
-    monkeypatch.setattr("m365_copilot_openai_proxy.cli._read_env_value", lambda _key: None)
+    monkeypatch.setattr(
+        "m365_copilot_openai_proxy.cli._read_env_value", lambda _key: None
+    )
     monkeypatch.setattr("m365_copilot_openai_proxy.cli.os.name", "posix")
     monkeypatch.setattr("m365_copilot_openai_proxy.cli.sys.platform", "linux")
 
@@ -297,16 +321,23 @@ def test_cli_linux_browser_priority_prefers_chromium(monkeypatch) -> None:
         "google-chrome": "/usr/bin/google-chrome",
         "microsoft-edge": "/usr/bin/microsoft-edge",
     }
-    monkeypatch.setattr("m365_copilot_openai_proxy.cli.shutil.which", lambda name: installed.get(name))
+    monkeypatch.setattr(
+        "m365_copilot_openai_proxy.cli.shutil.which", lambda name: installed.get(name)
+    )
 
     assert _resolve_debug_browser_path() == "/usr/bin/chromium"
 
 
 def test_cli_debug_browser_path_keeps_windows_default(monkeypatch) -> None:
-    monkeypatch.setattr("m365_copilot_openai_proxy.cli._read_env_value", lambda _key: None)
+    monkeypatch.setattr(
+        "m365_copilot_openai_proxy.cli._read_env_value", lambda _key: None
+    )
     monkeypatch.setattr("m365_copilot_openai_proxy.cli.os.name", "nt")
 
-    assert _resolve_debug_browser_path() == r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
+    assert (
+        _resolve_debug_browser_path()
+        == r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
+    )
 
 
 def test_cli_linux_snap_profile_dir_uses_non_hidden_home(monkeypatch, tmp_path) -> None:
@@ -328,7 +359,9 @@ def test_cli_linux_close_debug_browser_calls_cdp(monkeypatch) -> None:
         called_port = port
 
     monkeypatch.setattr("m365_copilot_openai_proxy.cli.sys.platform", "linux")
-    monkeypatch.setattr("m365_copilot_openai_proxy.cli._cdp_close_browser", fake_cdp_close)
+    monkeypatch.setattr(
+        "m365_copilot_openai_proxy.cli._cdp_close_browser", fake_cdp_close
+    )
 
     _close_debug_browser(1234)
     assert called_port == 1234
@@ -343,7 +376,9 @@ def test_cli_close_debug_browser_honors_setting(monkeypatch) -> None:
         nonlocal called
         called = True
 
-    monkeypatch.setattr("m365_copilot_openai_proxy.cli._cdp_close_browser", fake_cdp_close)
+    monkeypatch.setattr(
+        "m365_copilot_openai_proxy.cli._cdp_close_browser", fake_cdp_close
+    )
     monkeypatch.setenv("M365_HIDE_ON_TOKEN_SUCCESS", "false")
 
     _close_debug_browser(1234)
@@ -388,8 +423,12 @@ def test_openai_persistent_session_header_reuses_session() -> None:
         "messages": [{"role": "user", "content": "Hello"}],
     }
 
-    first = client.post("/v1/chat/completions", headers={"X-M365-Session-Id": "work"}, json=body)
-    second = client.post("/v1/chat/completions", headers={"X-M365-Session-Id": "work"}, json=body)
+    first = client.post(
+        "/v1/chat/completions", headers={"X-M365-Session-Id": "work"}, json=body
+    )
+    second = client.post(
+        "/v1/chat/completions", headers={"X-M365-Session-Id": "work"}, json=body
+    )
 
     assert first.status_code == 200
     assert second.status_code == 200
@@ -474,7 +513,9 @@ def test_persistent_session_rotates_on_truncated_history_edit() -> None:
 
     store = PersistentSessionStore()
     app = types.SimpleNamespace(
-        state=types.SimpleNamespace(session_store=store, settings=types.SimpleNamespace(persist_default=True))
+        state=types.SimpleNamespace(
+            session_store=store, settings=types.SimpleNamespace(persist_default=True)
+        )
     )
     req = types.SimpleNamespace(headers={})
 
@@ -489,8 +530,13 @@ def test_persistent_session_rotates_on_truncated_history_edit() -> None:
     conv = s.conversation_id
 
     # Faithful continuation: history carries both assistant turns -> keep the conversation.
-    cont = [msg("user", "hello there"), msg("assistant", "a1"),
-            msg("user", "u2"), msg("assistant", "a2"), msg("user", "u3")]
+    cont = [
+        msg("user", "hello there"),
+        msg("assistant", "a1"),
+        msg("user", "u2"),
+        msg("assistant", "a2"),
+        msg("user", "u3"),
+    ]
     s2 = _persistent_session(app, req, "m365-copilot", None, cont)
     assert s2.conversation_id == conv
 
@@ -526,9 +572,15 @@ def test_anthropic_messages_passthrough_only_for_non_m365_models(monkeypatch) ->
 
     monkeypatch.setattr(ap, "forward_messages", fake_forward)
 
-    settings = Settings(M365_ACCESS_TOKEN="fake-token", M365_PERSIST_DEFAULT=False, M365_ANTHROPIC_PASSTHROUGH=True)
+    settings = Settings(
+        M365_ACCESS_TOKEN="fake-token",
+        M365_PERSIST_DEFAULT=False,
+        M365_ANTHROPIC_PASSTHROUGH=True,
+    )
     fake = FakeCopilotClient()
-    client = TestClient(create_app(settings=settings, copilot_client_factory=lambda: fake))
+    client = TestClient(
+        create_app(settings=settings, copilot_client_factory=lambda: fake)
+    )
 
     body = {"max_tokens": 16, "messages": [{"role": "user", "content": "hi"}]}
 
@@ -548,7 +600,15 @@ def test_passthrough_headers_oauth_and_apikey(tmp_path) -> None:
 
     creds = tmp_path / ".credentials.json"
     creds.write_text(
-        json.dumps({"claudeAiOauth": {"accessToken": "tok-abc", "refreshToken": "r", "expiresAt": 9_999_999_999_000}}),
+        json.dumps(
+            {
+                "claudeAiOauth": {
+                    "accessToken": "tok-abc",
+                    "refreshToken": "r",
+                    "expiresAt": 9_999_999_999_000,
+                }
+            }
+        ),
         encoding="utf-8",
     )
 
@@ -589,19 +649,34 @@ def test_launch_debug_edge_reloads_existing_tab(monkeypatch) -> None:
     from m365_copilot_openai_proxy import cli
 
     calls = {"reload": 0, "popen": 0}
-    monkeypatch.setattr(cli, "_edge_debug_tabs", lambda port: [
-        {"type": "page", "url": "https://m365.cloud.microsoft/chat", "webSocketDebuggerUrl": "ws://debug"}
-    ])
+    monkeypatch.setattr(
+        cli,
+        "_edge_debug_tabs",
+        lambda port: [
+            {
+                "type": "page",
+                "url": "https://m365.cloud.microsoft/chat",
+                "webSocketDebuggerUrl": "ws://debug",
+            }
+        ],
+    )
 
     async def fake_reload(ws_url):
         calls["reload"] += 1
 
     monkeypatch.setattr(cli, "_cdp_reload_m365", fake_reload)
-    monkeypatch.setattr(cli.subprocess, "Popen", lambda *a, **k: calls.__setitem__("popen", calls["popen"] + 1))
+    monkeypatch.setattr(
+        cli.subprocess,
+        "Popen",
+        lambda *a, **k: calls.__setitem__("popen", calls["popen"] + 1),
+    )
 
     cli._launch_debug_edge(9222)
 
-    assert calls == {"reload": 1, "popen": 0}  # reused + reloaded, no duplicate window spawned
+    assert calls == {
+        "reload": 1,
+        "popen": 0,
+    }  # reused + reloaded, no duplicate window spawned
 
 
 def test_launch_debug_edge_spawns_visible_when_no_tab(monkeypatch, tmp_path) -> None:
@@ -609,9 +684,15 @@ def test_launch_debug_edge_spawns_visible_when_no_tab(monkeypatch, tmp_path) -> 
 
     popen_calls: list[tuple] = []
     monkeypatch.setattr(cli, "_edge_debug_tabs", lambda port: None)
-    monkeypatch.setattr(cli, "_resolve_debug_browser_path", lambda: str(tmp_path / "edge.exe"))
-    monkeypatch.setattr(cli, "_debug_browser_profile_dir", lambda p: tmp_path / "profile")
-    monkeypatch.setattr(cli.subprocess, "Popen", lambda *a, **k: popen_calls.append((a, k)))
+    monkeypatch.setattr(
+        cli, "_resolve_debug_browser_path", lambda: str(tmp_path / "edge.exe")
+    )
+    monkeypatch.setattr(
+        cli, "_debug_browser_profile_dir", lambda p: tmp_path / "profile"
+    )
+    monkeypatch.setattr(
+        cli.subprocess, "Popen", lambda *a, **k: popen_calls.append((a, k))
+    )
     monkeypatch.delenv("M365_EDGE_HEADLESS", raising=False)
 
     cli._launch_debug_edge(9222)
@@ -736,4 +817,7 @@ def test_responses_requires_final_user_message() -> None:
     )
 
     assert response.status_code == 400
-    assert response.json()["detail"] == "The final Responses input message must be a user message."
+    assert (
+        response.json()["detail"]
+        == "The final Responses input message must be a user message."
+    )

@@ -10,6 +10,7 @@ agentic clients (OpenCode, etc.) work, we:
 This is best-effort: the model may ignore the format. Parsing is deliberately
 tolerant.
 """
+
 from __future__ import annotations
 
 import json
@@ -42,17 +43,25 @@ def _function_specs(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
             continue
         fn = tool.get("function")
         if isinstance(fn, dict):  # OpenAI shape
-            specs.append({
-                "name": fn.get("name"),
-                "description": fn.get("description", ""),
-                "parameters": fn.get("parameters", {"type": "object", "properties": {}}),
-            })
+            specs.append(
+                {
+                    "name": fn.get("name"),
+                    "description": fn.get("description", ""),
+                    "parameters": fn.get(
+                        "parameters", {"type": "object", "properties": {}}
+                    ),
+                }
+            )
         elif tool.get("name"):  # Anthropic shape
-            specs.append({
-                "name": tool.get("name"),
-                "description": tool.get("description", ""),
-                "parameters": tool.get("input_schema", {"type": "object", "properties": {}}),
-            })
+            specs.append(
+                {
+                    "name": tool.get("name"),
+                    "description": tool.get("description", ""),
+                    "parameters": tool.get(
+                        "input_schema", {"type": "object", "properties": {}}
+                    ),
+                }
+            )
     return [s for s in specs if s.get("name")]
 
 
@@ -97,7 +106,9 @@ def build_tools_system_prompt(
     lines.append("# Output protocol (MANDATORY)")
     lines.append(message("tools.protocol_intro"))
     lines.append(_BEGIN)
-    lines.append('[{"name": "<function_name>", "arguments": {<json object matching the schema>}}]')
+    lines.append(
+        '[{"name": "<function_name>", "arguments": {<json object matching the schema>}}]'
+    )
     lines.append(_END)
     lines.append(message("tools.args_rule"))
     lines.append(message("tools.invalid_rule"))
@@ -110,7 +121,9 @@ def build_tools_system_prompt(
     lines.append(_END)
 
     choice_name = _forced_tool_name(tool_choice)
-    if tool_choice == "required" or (isinstance(tool_choice, str) and tool_choice not in ("auto", "none")):
+    if tool_choice == "required" or (
+        isinstance(tool_choice, str) and tool_choice not in ("auto", "none")
+    ):
         lines.append("")
         lines.append(message("tools.required"))
     if choice_name:
@@ -177,7 +190,9 @@ def _allowed_map(tools: list[dict[str, Any]] | None) -> dict[str, set[str]] | No
     return out
 
 
-def parse_tool_calls(text: str, tools: list[dict[str, Any]] | None = None) -> list[ToolCall] | None:
+def parse_tool_calls(
+    text: str, tools: list[dict[str, Any]] | None = None
+) -> list[ToolCall] | None:
     """Extract and verify tool calls from the model's text reply, or None if there are none.
 
     Verification (the "JSON verifier"): each call must have a name (in the allowed tool set
@@ -229,7 +244,9 @@ def parse_tool_calls(text: str, tools: list[dict[str, Any]] | None = None) -> li
             ToolCall(
                 id=f"call_{uuid.uuid4().hex[:24]}",
                 type="function",
-                function=FunctionCall(name=name, arguments=json.dumps(args, ensure_ascii=False)),
+                function=FunctionCall(
+                    name=name, arguments=json.dumps(args, ensure_ascii=False)
+                ),
             )
         )
     return calls or None
@@ -284,5 +301,5 @@ def _first_balanced(s: str) -> str | None:
         elif ch == closer:
             depth -= 1
             if depth == 0:
-                return s[start:i + 1]
+                return s[start : i + 1]
     return None

@@ -19,5 +19,9 @@ def load_substrate_config() -> dict[str, Any]:
     if override:
         text = Path(override).read_text(encoding="utf-8")
     else:
-        text = resources.files(__package__).joinpath("substrate.json").read_text(encoding="utf-8")
+        text = (
+            resources.files(__package__)
+            .joinpath("substrate.json")
+            .read_text(encoding="utf-8")
+        )
     return json.loads(text)

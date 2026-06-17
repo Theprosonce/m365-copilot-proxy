@@ -98,7 +98,9 @@ class SubstrateCopilotClient:
         except Exception as exc:
             raise SubstrateCopilotError(f"Cannot decode access token: {exc}") from exc
         if not is_substrate_token_claims(claims):
-            raise SubstrateCopilotError("Access token is not a substrate.office.com token.")
+            raise SubstrateCopilotError(
+                "Access token is not a substrate.office.com token."
+            )
         if time.time() > claims.get("exp", 0):
             raise SubstrateCopilotError(
                 "Access token expired. To refresh: open M365 Copilot in your browser, "
@@ -144,7 +146,10 @@ class SubstrateCopilotClient:
             "text": text,
             "entityAnnotationTypes": _FRAME["entity_annotation_types"],
             "requestId": req_id,
-            "locationInfo": {"timeZoneOffset": _FRAME["location_time_zone_offset"], "timeZone": self._time_zone},
+            "locationInfo": {
+                "timeZoneOffset": _FRAME["location_time_zone_offset"],
+                "timeZone": self._time_zone,
+            },
             "locale": _FRAME["locale"],
             "messageType": "Chat",
             "experienceType": "Default",
@@ -158,35 +163,37 @@ class SubstrateCopilotClient:
                 o for o in _IMAGE_FRAME_OPTIONS_SETS if o not in _OPTIONS_SETS
             ]
         payload = {
-            "arguments": [{
-                "source": _FRAME["source"],
-                "clientCorrelationId": req_id,
-                "sessionId": session_id,
-                "optionsSets": options_sets,
-                "streamingMode": _FRAME["streaming_mode"],
-                "spokenTextMode": _FRAME["spoken_text_mode"],
-                "options": {},
-                "extraExtensionParameters": {},
-                "allowedMessageTypes": _ALLOWED_MESSAGE_TYPES,
-                "sliceIds": [],
-                "threadLevelGptId": {},
-                "traceId": req_id,
-                "isStartOfSession": is_start_of_session,
-                "clientInfo": {
-                    "clientPlatform": ci["clientPlatform"],
-                    "clientAppName": ci["clientAppName"],
-                    "clientEntrypoint": ci["clientEntrypoint"],
-                    "clientSessionId": session_id,
-                    "clientAppType": ci["clientAppType"],
-                    "deviceOS": ci["deviceOS"],
-                    "deviceType": ci["deviceType"],
-                },
-                "message": message,
-                "plugins": _FRAME["plugins"],
-                "isSbsSupported": True,
-                "tone": tone,
-                "renderReferencesBehindEOS": True,
-            }],
+            "arguments": [
+                {
+                    "source": _FRAME["source"],
+                    "clientCorrelationId": req_id,
+                    "sessionId": session_id,
+                    "optionsSets": options_sets,
+                    "streamingMode": _FRAME["streaming_mode"],
+                    "spokenTextMode": _FRAME["spoken_text_mode"],
+                    "options": {},
+                    "extraExtensionParameters": {},
+                    "allowedMessageTypes": _ALLOWED_MESSAGE_TYPES,
+                    "sliceIds": [],
+                    "threadLevelGptId": {},
+                    "traceId": req_id,
+                    "isStartOfSession": is_start_of_session,
+                    "clientInfo": {
+                        "clientPlatform": ci["clientPlatform"],
+                        "clientAppName": ci["clientAppName"],
+                        "clientEntrypoint": ci["clientEntrypoint"],
+                        "clientSessionId": session_id,
+                        "clientAppType": ci["clientAppType"],
+                        "deviceOS": ci["deviceOS"],
+                        "deviceType": ci["deviceType"],
+                    },
+                    "message": message,
+                    "plugins": _FRAME["plugins"],
+                    "isSbsSupported": True,
+                    "tone": tone,
+                    "renderReferencesBehindEOS": True,
+                }
+            ],
             "invocationId": "0",
             "target": "chat",
             "type": 4,
@@ -226,7 +233,9 @@ class SubstrateCopilotClient:
             ):
                 yield chunk
 
-    async def _upload_image(self, conv_id: str, image: ExtractedImage) -> MessageAnnotation | None:
+    async def _upload_image(
+        self, conv_id: str, image: ExtractedImage
+    ) -> MessageAnnotation | None:
         """Upload one image to substrate, returning its `messageAnnotation` (carrying the
         docId), or None if the upload failed. The image must be uploaded under the same
         conversationId the prompt frame will use, before that frame is sent."""
@@ -278,29 +287,42 @@ class SubstrateCopilotClient:
         url = self._ws_url(conv_id, session_id, req_id)
         t0 = time.perf_counter()
         try:
-            async with websockets.connect(
-                url,
-                additional_headers={
-                    "Origin": _ORIGIN,
-                },
-                open_timeout=self._open_timeout,   # substrate handshake can exceed the 10s default under load
-                max_size=None,     # substrate replies (file contents, etc.) can be large
-            ) as ws:
+            async with (
+                websockets.connect(
+                    url,
+                    additional_headers={
+                        "Origin": _ORIGIN,
+                    },
+                    open_timeout=self._open_timeout,  # substrate handshake can exceed the 10s default under load
+                    max_size=None,  # substrate replies (file contents, etc.) can be large
+                ) as ws
+            ):
                 t_conn = time.perf_counter()
-                await ws.send(json.dumps({"protocol": "json", "version": 1}) + SIGNALR_SEP)
+                await ws.send(
+                    json.dumps({"protocol": "json", "version": 1}) + SIGNALR_SEP
+                )
                 await asyncio.wait_for(ws.recv(), timeout=self._recv_timeout)
                 t_nego = time.perf_counter()
-                await ws.send(self._chat_invoke(
-                    text, conv_id, session_id, req_id, is_start_of_session, tone,
-                    annotations=annotations or None,
-                ))
+                await ws.send(
+                    self._chat_invoke(
+                        text,
+                        conv_id,
+                        session_id,
+                        req_id,
+                        is_start_of_session,
+                        tone,
+                        annotations=annotations or None,
+                    )
+                )
                 t_sent = time.perf_counter()
                 fallback_text = ""
                 yielded_any = False
                 first_delta: float | None = None
                 while True:
                     try:
-                        raw = await asyncio.wait_for(ws.recv(), timeout=self._recv_timeout)
+                        raw = await asyncio.wait_for(
+                            ws.recv(), timeout=self._recv_timeout
+                        )
                     except asyncio.TimeoutError as exc:
                         raise SubstrateCopilotError(
                             f"No response from substrate within {self._recv_timeout}s "
@@ -367,7 +389,9 @@ class SubstrateCopilotClient:
         images: list[ExtractedImage] | None = None,
     ) -> str:
         chunks: list[str] = []
-        async for chunk in self.chat_stream(prompt, additional_context, session, tone, images):
+        async for chunk in self.chat_stream(
+            prompt, additional_context, session, tone, images
+        ):
             chunks.append(chunk)
         return "".join(chunks)
 

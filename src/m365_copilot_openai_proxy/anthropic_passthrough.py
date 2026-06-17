@@ -9,6 +9,7 @@ Only the minimal forward is implemented (header allowlist + SSE streaming + OAut
 sol proxy's security layer (Keycloak/jwt-gateway, tier enforcement, client_id exchange, anti-Cloudflare
 TLS) is intentionally NOT reproduced.
 """
+
 from __future__ import annotations
 
 import json
@@ -39,7 +40,11 @@ def credential_available(settings: Any) -> bool:
     if (getattr(settings, "anthropic_key", "") or "").strip():
         return True
     try:
-        return bool(json.loads(_creds_path(settings).read_text("utf-8")).get("claudeAiOauth", {}).get("accessToken"))
+        return bool(
+            json.loads(_creds_path(settings).read_text("utf-8"))
+            .get("claudeAiOauth", {})
+            .get("accessToken")
+        )
     except Exception:
         return False
 
@@ -47,15 +52,25 @@ def credential_available(settings: Any) -> bool:
 def _refresh_oauth(refresh_token: str) -> tuple[str, str, int]:
     resp = httpx.post(
         _OAUTH_TOKEN_ENDPOINT,
-        json={"grant_type": "refresh_token", "refresh_token": refresh_token, "client_id": _OAUTH_CLIENT_ID},
+        json={
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+            "client_id": _OAUTH_CLIENT_ID,
+        },
         headers={"Content-Type": "application/json", "Accept": "application/json"},
         timeout=30,
     )
     resp.raise_for_status()
     data = resp.json()
     expires_in = int(data.get("expires_in", 3600))
-    print(f"   OAuth refresh: ok (status {resp.status_code}, new token valid ~{expires_in // 60}m)")
-    return data["access_token"], data.get("refresh_token", refresh_token), int(time.time() * 1000) + expires_in * 1000
+    print(
+        f"   OAuth refresh: ok (status {resp.status_code}, new token valid ~{expires_in // 60}m)"
+    )
+    return (
+        data["access_token"],
+        data.get("refresh_token", refresh_token),
+        int(time.time() * 1000) + expires_in * 1000,
+    )
 
 
 def _oauth_access_token(settings: Any) -> str:
@@ -67,20 +82,34 @@ def _oauth_access_token(settings: Any) -> str:
     refresh = oauth.get("refreshToken", "")
     expires_at = int(oauth.get("expiresAt") or 0)
 
-    if access and (not expires_at or time.time() * 1000 < expires_at - _REFRESH_BUFFER_MS):
+    if access and (
+        not expires_at or time.time() * 1000 < expires_at - _REFRESH_BUFFER_MS
+    ):
         left = int((expires_at / 1000 - time.time()) / 60) if expires_at else None
-        print(f"   OAuth token: valid ({left}m left), reusing" if left is not None else "   OAuth token: valid (no expiry), reusing")
+        print(
+            f"   OAuth token: valid ({left}m left), reusing"
+            if left is not None
+            else "   OAuth token: valid (no expiry), reusing"
+        )
         return access
     if not refresh:
         if access:
-            print("   OAuth token: expired and no refresh_token — trying the stale token anyway")
+            print(
+                "   OAuth token: expired and no refresh_token — trying the stale token anyway"
+            )
             return access  # no refresh token but we have an access token — try it
         raise RuntimeError("no OAuth access/refresh token in credentials file")
 
-    print("   OAuth token: near expiry/expired -> refreshing via platform.claude.com ...")
+    print(
+        "   OAuth token: near expiry/expired -> refreshing via platform.claude.com ..."
+    )
     new_access, new_refresh, new_expires = _refresh_oauth(refresh)
     # Write back preserving every sibling field Claude Code manages (scopes, subscriptionType, ...).
-    oauth["accessToken"], oauth["refreshToken"], oauth["expiresAt"] = new_access, new_refresh, new_expires
+    oauth["accessToken"], oauth["refreshToken"], oauth["expiresAt"] = (
+        new_access,
+        new_refresh,
+        new_expires,
+    )
     raw["claudeAiOauth"] = oauth
     try:
         path.write_text(json.dumps(raw), "utf-8")
@@ -114,7 +143,11 @@ def _upstream_headers(settings: Any, client_headers: Any) -> dict[str, str]:
         headers["Authorization"] = f"Bearer {token}"
         # OAuth tokens require this beta flag; merge with any beta the client already asked for.
         beta = ch("anthropic-beta")
-        headers["anthropic-beta"] = f"{beta},{_OAUTH_BETA}" if beta and _OAUTH_BETA not in beta else (beta or _OAUTH_BETA)
+        headers["anthropic-beta"] = (
+            f"{beta},{_OAUTH_BETA}"
+            if beta and _OAUTH_BETA not in beta
+            else (beta or _OAUTH_BETA)
+        )
     return headers
 
 
@@ -124,7 +157,13 @@ async def forward_messages(settings: Any, body: bytes, client_headers: Any):
         headers = _upstream_headers(settings, client_headers)
     except Exception as exc:
         return JSONResponse(
-            {"type": "error", "error": {"type": "api_error", "message": f"passthrough credential error: {exc}"}},
+            {
+                "type": "error",
+                "error": {
+                    "type": "api_error",
+                    "message": f"passthrough credential error: {exc}",
+                },
+            },
             status_code=502,
         )
 
@@ -138,7 +177,13 @@ async def forward_messages(settings: Any, body: bytes, client_headers: Any):
         await client.aclose()
         print(f"[502] passthrough upstream error ({url}, auth={mode}): {exc}")
         return JSONResponse(
-            {"type": "error", "error": {"type": "api_error", "message": f"passthrough upstream error: {exc}"}},
+            {
+                "type": "error",
+                "error": {
+                    "type": "api_error",
+                    "message": f"passthrough upstream error: {exc}",
+                },
+            },
             status_code=502,
         )
     print(f"   passthrough -> {url} (auth={mode}) status={resp.status_code}")

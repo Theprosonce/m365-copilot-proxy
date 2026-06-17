@@ -19,13 +19,19 @@ from m365_copilot_openai_proxy.app import (
 )
 from m365_copilot_openai_proxy.config import Settings
 from m365_copilot_openai_proxy.models import ContentPart, ExtractedImage, OpenAIMessage
-from m365_copilot_openai_proxy.session_store import PersistentSession, PersistentSessionStore
+from m365_copilot_openai_proxy.session_store import (
+    PersistentSession,
+    PersistentSessionStore,
+)
 from m365_copilot_openai_proxy.substrate_client import (
     SubstrateCopilotClient,
     _combine_text,
     resolve_tone,
 )
-from m365_copilot_openai_proxy.translator import extract_file_attachments, extract_images
+from m365_copilot_openai_proxy.translator import (
+    extract_file_attachments,
+    extract_images,
+)
 
 
 def _make_jwt(exp: int, aud: str = "https://substrate.office.com/sydney") -> str:
@@ -35,12 +41,18 @@ def _make_jwt(exp: int, aud: str = "https://substrate.office.com/sydney") -> str
     return f"{enc({'alg': 'none'})}.{enc({'aud': aud, 'exp': exp, 'oid': 'oid', 'tid': 'tid'})}.sig"
 
 
-def _png_bytes(w: int = 8, h: int = 8, rgb: tuple[int, int, int] = (220, 20, 20)) -> bytes:
+def _png_bytes(
+    w: int = 8, h: int = 8, rgb: tuple[int, int, int] = (220, 20, 20)
+) -> bytes:
     raw = b"".join(b"\x00" + bytes(rgb) * w for _ in range(h))
 
     def chunk(t: bytes, d: bytes) -> bytes:
         c = t + d
-        return struct.pack(">I", len(d)) + c + struct.pack(">I", zlib.crc32(c) & 0xFFFFFFFF)
+        return (
+            struct.pack(">I", len(d))
+            + c
+            + struct.pack(">I", zlib.crc32(c) & 0xFFFFFFFF)
+        )
 
     return (
         b"\x89PNG\r\n\x1a\n"
@@ -56,48 +68,72 @@ class FakeCopilotClient:
         self.sessions: list[object | None] = []
         self.images: list[object] = []
 
-    async def chat(self, prompt, additional_context, session=None, tone=None, images=None) -> str:
+    async def chat(
+        self, prompt, additional_context, session=None, tone=None, images=None
+    ) -> str:
         self.calls.append((prompt, additional_context))
         self.sessions.append(session)
         self.images.append(images)
         return "reply"
 
-    async def chat_stream(self, prompt, additional_context, session=None, tone=None, images=None) -> AsyncIterator[str]:
+    async def chat_stream(
+        self, prompt, additional_context, session=None, tone=None, images=None
+    ) -> AsyncIterator[str]:
         self.calls.append((prompt, additional_context))
         self.sessions.append(session)
         self.images.append(images)
         yield "x"
 
 
-def _client(fake: FakeCopilotClient, tmp_db: Path, persist_default: bool = True) -> TestClient:
+def _client(
+    fake: FakeCopilotClient, tmp_db: Path, persist_default: bool = True
+) -> TestClient:
     settings = Settings(
         M365_ACCESS_TOKEN="fake",
         M365_PERSIST_DEFAULT=persist_default,
         M365_SESSION_DB=str(tmp_db),
     )
-    return TestClient(create_app(settings=settings, copilot_client_factory=lambda: fake))
+    return TestClient(
+        create_app(settings=settings, copilot_client_factory=lambda: fake)
+    )
 
 
 # --- vision: inline image extraction ---
+
 
 def test_extract_images_openai_and_anthropic() -> None:
     oa = [
         ContentPart(type="text", text="hi"),
         ContentPart(type="image_url", image_url={"url": "data:image/png;base64,AAAA"}),
     ]
-    an = [ContentPart(type="image", source={"type": "base64", "media_type": "image/jpeg", "data": "BBBB"})]
+    an = [
+        ContentPart(
+            type="image",
+            source={"type": "base64", "media_type": "image/jpeg", "data": "BBBB"},
+        )
+    ]
     a = extract_images(oa)
     b = extract_images(an)
-    assert len(a) == 1 and a[0].file_type == "png" and a[0].data_uri.startswith("data:image/png")
+    assert (
+        len(a) == 1
+        and a[0].file_type == "png"
+        and a[0].data_uri.startswith("data:image/png")
+    )
     assert len(b) == 1 and b[0].file_type == "jpg"  # jpeg normalized to jpg
 
 
 def test_extract_images_skips_remote_and_text() -> None:
     assert extract_images("plain string") == []
-    assert extract_images([ContentPart(type="image_url", image_url={"url": "https://x/y.png"})]) == []
+    assert (
+        extract_images(
+            [ContentPart(type="image_url", image_url={"url": "https://x/y.png"})]
+        )
+        == []
+    )
 
 
 # --- vision: VS Code file:// attachment resolution off disk ---
+
 
 def test_extract_file_attachments_resolves_local_png(tmp_path) -> None:
     p = tmp_path / "shot.png"
@@ -122,9 +158,12 @@ def test_extract_file_attachments_ignores_missing_and_nonimage(tmp_path) -> None
 
 # --- session keying: distinct chats -> distinct conversations ---
 
+
 def test_first_real_user_text_skips_vscode_wrappers() -> None:
     msgs = [
-        OpenAIMessage(role="user", content="<environment_info>OS Windows</environment_info>"),
+        OpenAIMessage(
+            role="user", content="<environment_info>OS Windows</environment_info>"
+        ),
         OpenAIMessage(role="user", content="<workspace_info>tree</workspace_info>"),
         OpenAIMessage(role="user", content="the real question"),
     ]
@@ -150,7 +189,10 @@ def test_persist_without_user_is_one_conversation_per_chat(tmp_path) -> None:
             json={
                 "model": "m365-opus:persist",
                 "messages": [
-                    {"role": "user", "content": "<environment_info>OS</environment_info>"},
+                    {
+                        "role": "user",
+                        "content": "<environment_info>OS</environment_info>",
+                    },
                     {"role": "user", "content": first},
                 ],
             },
@@ -165,8 +207,12 @@ def test_persist_without_user_is_one_conversation_per_chat(tmp_path) -> None:
 
 # --- history trimming on continued turns ---
 
+
 def test_trim_history_drops_transcript_after_first_turn() -> None:
-    ctx = ["System instructions:\nbe nice", "Prior conversation transcript:\nUser: a\nAssistant: b"]
+    ctx = [
+        "System instructions:\nbe nice",
+        "Prior conversation transcript:\nUser: a\nAssistant: b",
+    ]
     fresh = PersistentSession()  # turn_count 0
     assert _trim_history(list(ctx), fresh) == ctx  # first turn keeps everything
     continued = PersistentSession()
@@ -182,6 +228,7 @@ def test_combine_text_leads_with_prompt() -> None:
 
 
 # --- session store CRUD + SQLite persistence ---
+
 
 def test_session_store_crud_and_persistence(tmp_path) -> None:
     db = tmp_path / "sessions.db"
@@ -205,7 +252,9 @@ def test_chats_crud_endpoints(tmp_path) -> None:
     assert created.status_code == 201
     key = created.json()["key"]
     assert client.get(f"/v1/chats/{key}").json()["label"] == "smoke"
-    patched = client.patch(f"/v1/chats/{key}", json={"label": "renamed", "rotate": True})
+    patched = client.patch(
+        f"/v1/chats/{key}", json={"label": "renamed", "rotate": True}
+    )
     assert patched.json()["label"] == "renamed"
     assert client.get("/v1/chats").json()["count"] == 1
     assert client.delete(f"/v1/chats/{key}").json()["deleted"] is True
@@ -213,6 +262,7 @@ def test_chats_crud_endpoints(tmp_path) -> None:
 
 
 # --- disableMemory (temporary chat) on the WS url ---
+
 
 def test_ws_url_disable_memory_default_on() -> None:
     c = SubstrateCopilotClient(_make_jwt(int(time.time()) + 3600))
@@ -226,6 +276,7 @@ def test_ws_url_disable_memory_can_be_off() -> None:
 
 # --- tone / model picker ---
 
+
 def test_resolve_tone_mapping() -> None:
     assert resolve_tone("m365-gpt") == "Gpt_5_5_Chat"
     assert resolve_tone("m365-gpt-think") == "Gpt_5_5_Reasoning"
@@ -234,6 +285,7 @@ def test_resolve_tone_mapping() -> None:
 
 
 # --- OpenAPI surface ---
+
 
 def test_openapi_exposes_chats_and_tags(tmp_path) -> None:
     client = _client(FakeCopilotClient(), tmp_path / "s.db")
@@ -246,6 +298,7 @@ def test_openapi_exposes_chats_and_tags(tmp_path) -> None:
 
 # --- vision wired end-to-end through the endpoint (image forwarded to client) ---
 
+
 def test_chat_forwards_resolved_file_attachment_image(tmp_path) -> None:
     p = tmp_path / "pic.png"
     p.write_bytes(_png_bytes())
@@ -256,7 +309,12 @@ def test_chat_forwards_resolved_file_attachment_image(tmp_path) -> None:
         "/v1/chat/completions",
         json={
             "model": "m365-opus",
-            "messages": [{"role": "user", "content": f'<attachment name="image" id="image:{uri}">\nwhat is this'}],
+            "messages": [
+                {
+                    "role": "user",
+                    "content": f'<attachment name="image" id="image:{uri}">\nwhat is this',
+                }
+            ],
         },
     )
     assert resp.status_code == 200
@@ -280,7 +338,12 @@ def test_image_url_in_split_user_turn_is_found(tmp_path) -> None:
             "model": "m365-opus",
             "messages": [
                 {"role": "user", "content": "<attachments>"},
-                {"role": "user", "content": [{"type": "image_url", "image_url": {"url": _data_uri_png()}}]},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image_url", "image_url": {"url": _data_uri_png()}}
+                    ],
+                },
                 {"role": "user", "content": "</attachments>\nwhat do you see?"},
             ],
         },
@@ -301,7 +364,12 @@ def test_history_images_before_assistant_are_excluded(tmp_path) -> None:
         json={
             "model": "m365-opus",
             "messages": [
-                {"role": "user", "content": [{"type": "image_url", "image_url": {"url": _data_uri_png()}}]},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image_url", "image_url": {"url": _data_uri_png()}}
+                    ],
+                },
                 {"role": "assistant", "content": "saw it"},
                 {"role": "user", "content": "text-only follow up"},
             ],
