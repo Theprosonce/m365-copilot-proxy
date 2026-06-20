@@ -267,8 +267,15 @@ TOOLS = {
 
 
 class RuntimeBridge:
-    def __init__(self, root_dir: str):
+    # `bash`/`run` execute arbitrary host commands via `subprocess.run(shell=True)`. The path
+    # sandbox only constrains the *cwd*, NOT the command — so this is full RCE on the host. It is
+    # gated behind an explicit opt-in (default off). When wiring execution, pass
+    # `allow_bash = settings.tool_emulation_execution_enabled and not settings.tool_emulation_execution_sandbox`.
+    _SHELL_TOOLS = frozenset({"bash", "run"})
+
+    def __init__(self, root_dir: str, allow_bash: bool = False):
         self.root = Path(root_dir).resolve()
+        self.allow_bash = allow_bash
         self.conversation_history: list[dict[str, Any]] = []
 
     def process_assistant_message(self, message: str) -> list[dict[str, Any]] | None:
@@ -317,6 +324,15 @@ class RuntimeBridge:
         if not isinstance(arguments, dict):
             return self._error(
                 "validation_error", "Arguments must be an object", name=name
+            )
+        if name in self._SHELL_TOOLS and not self.allow_bash:
+            return self._error(
+                "sandbox_error",
+                "Shell execution is disabled. It runs arbitrary host commands "
+                "(shell=True) and the path sandbox does not constrain the command; "
+                "enable explicitly via allow_bash.",
+                name=name,
+                arguments=arguments,
             )
         tool = TOOLS.get(name)
         if tool is None:

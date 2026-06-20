@@ -4,7 +4,11 @@ from pathlib import Path
 
 import pytest
 
-from runtime_bridge import RuntimeBridge, _BEGIN, _END
+from m365_copilot_openai_proxy.tool_middleware.runtime_bridge import (
+    RuntimeBridge,
+    _BEGIN,
+    _END,
+)
 
 
 @pytest.fixture
@@ -87,7 +91,7 @@ def test_partial_file_read(temp_workspace: Path) -> None:
 
 
 def test_multiple_tool_calls(temp_workspace: Path) -> None:
-    bridge = RuntimeBridge(str(temp_workspace))
+    bridge = RuntimeBridge(str(temp_workspace), allow_bash=True)
     message = f'{_BEGIN}\n[{{"name":"glob","arguments":{{"pattern":"*.txt"}}}},{{"name":"bash","arguments":{{"command":"echo hi"}}}}]\n{_END}'
 
     results = bridge.process_assistant_message(message)
@@ -96,6 +100,16 @@ def test_multiple_tool_calls(temp_workspace: Path) -> None:
     assert results[0]["name"] == "glob"
     assert results[1]["name"] == "bash"
     assert results[1]["result"]["stdout"].strip() == "hi"
+
+
+def test_bash_disabled_by_default(temp_workspace: Path) -> None:
+    bridge = RuntimeBridge(str(temp_workspace))
+    message = f'{_BEGIN}[{{"name":"bash","arguments":{{"command":"echo hi"}}}}]{_END}'
+
+    results = bridge.process_assistant_message(message)
+
+    assert results[0]["status"] == "error"
+    assert results[0]["error_type"] == "sandbox_error"
 
 
 def test_no_tool_call_message(temp_workspace: Path) -> None:

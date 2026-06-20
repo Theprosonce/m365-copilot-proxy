@@ -7,9 +7,15 @@ from pathlib import Path
 from typing import Any, Tuple
 
 from ..config import Settings
+from ..messages import message
 from ..models import OpenAIChatRequest, ToolCall, FunctionCall
+from .bypass import looks_like_bypass as _looks_like_bypass
 
 logger = logging.getLogger(__name__)
+
+# Tool-call sentinels (kept in code: coupled to the parser regex below).
+_BEGIN = "<<<TOOL_CALLS>>>"
+_END = "<<<END_TOOL_CALLS>>>"
 
 FILE_TOOLS_WITH_FILEPATH = frozenset({"read"})
 
@@ -183,92 +189,82 @@ class ToolEmulationPipeline:
         }
         return hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()
 
+    @staticmethod
+    def _forced_tool_name(tool_choice: Any) -> str | None:
+        if isinstance(tool_choice, dict):
+            return tool_choice.get("function", {}).get("name") or tool_choice.get("name")
+        if isinstance(tool_choice, str) and tool_choice not in ("auto", "none", "required"):
+            return tool_choice
+        return None
+
+    def _tool_signature(self, t: dict[str, Any]) -> str:
+        name = t.get("name", "unknown")
+        desc = (t.get("description", "") or "").replace("\n", " ")
+        if len(desc) > 200:
+            desc = desc[:197] + "..."
+        params = t.get("parameters", {}) or {}
+        props = params.get("properties", {}) if isinstance(params, dict) else {}
+        req = params.get("required", []) if isinstance(params, dict) else []
+        args_str = []
+        for k, v in props.items():
+            mark = "" if k in req else "?"
+            typ = v.get("type", "any") if isinstance(v, dict) else "any"
+            args_str.append(f"{k}{mark}:{typ}")
+        sig = f"{name}({', '.join(args_str)})"
+        if desc:
+            sig += f" - {desc}"
+        cap = self.settings.tool_emulation_max_single_tool_schema_chars
+        if len(sig) > cap:
+            sig = sig[: cap - 3] + "..."
+        return sig
+
     def _render_prompt(self, tools: list[dict[str, Any]], tool_choice: Any) -> str:
+        # The fixed prose comes from the shared message bundle (messages.properties /
+        # M365_PROMPT_TOOLS_*); only the per-tool signatures and sentinels are built here.
         if not tools and tool_choice in (None, "auto"):
             return ""
 
         lines = [
-            "# Tool Instructions",
-            "You are an AI assistant capable of using tools. When you need external information or action, you must use a tool.",
-            "Always think step-by-step before using a tool.",
+            message("tools.intro"),
             "",
-            "## Available Tools:",
+            message("tools.verify_first"),
+            "",
+            message("tools.project_reach"),
+            "",
+            message("tools.read_length"),
+            "",
+            "# Callable functions",
+        ]
+        for t in tools:
+            lines.append(f"- {self._tool_signature(t)}")
+        lines += [
+            "",
+            "# Output protocol (MANDATORY)",
+            message("tools.protocol_intro"),
+            _BEGIN,
+            '[{"name": "<function_name>", "arguments": {<json object matching the schema>}}]',
+            _END,
+            message("tools.args_rule"),
+            message("tools.invalid_rule"),
+            message("tools.no_discuss"),
+            "",
+            "# Example",
+            message("tools.example_intro"),
+            _BEGIN,
+            '[{"name": "glob", "arguments": {"pattern": "**/*"}}]',
+            _END,
         ]
 
-        for t in tools:
-            name = t.get("name", "unknown")
-            desc = (t.get("description", "") or "").replace("\n", " ")
-            if len(desc) > 200:
-                desc = desc[:197] + "..."
-
-            params = t.get("parameters", {})
-            props = params.get("properties", {})
-            req = params.get("required", [])
-
-            args_str = []
-            for k, v in props.items():
-                m = "" if k in req else "?"
-                typ = v.get("type", "any")
-                args_str.append(f"{k}{m}:{typ}")
-
-            sig = f"{name}({', '.join(args_str)})"
-            if desc:
-                sig += f" - {desc}"
-
-            if len(sig) > self.settings.tool_emulation_max_single_tool_schema_chars:
-                sig = (
-                    sig[: self.settings.tool_emulation_max_single_tool_schema_chars - 3]
-                    + "..."
-                )
-            lines.append(f"- {sig}")
-
-        lines.append("")
-        lines.append("## Output Protocol (MANDATORY)")
-        lines.append(
-            "To call a tool, you MUST output a JSON array of tool calls wrapped in strict sentinels:"
-        )
-        lines.append("<<<TOOL_CALLS>>>")
-        lines.append('[{"name": "tool_name", "arguments": {"arg_name": "arg_value"}}]')
-        lines.append("<<<END_TOOL_CALLS>>>")
-        lines.append("")
-        lines.append("Rules:")
-        lines.append("1. Do not use Markdown for the block.")
-        lines.append(
-            "2. Output ONLY the tool block when using a tool. Do not write text before or after."
-        )
-        lines.append("3. Use exactly one tool call unless specified.")
-        lines.append("4. Arguments MUST strictly match the provided schema and types.")
-        lines.append(
-            "5. Do not invent missing required arguments; ask the user instead."
-        )
-        lines.append(
-            "6. If no tool is needed, answer the user normally without the block."
-        )
-
-        forced_name = None
-        if isinstance(tool_choice, dict):
-            forced_name = tool_choice.get("function", {}).get(
-                "name"
-            ) or tool_choice.get("name")
-        elif isinstance(tool_choice, str) and tool_choice not in (
-            "auto",
-            "none",
-            "required",
-        ):
-            forced_name = tool_choice
-
+        forced_name = self._forced_tool_name(tool_choice)
         if forced_name:
-            lines.append(f"\nYou MUST use the tool '{forced_name}'.")
+            lines += ["", message("tools.forced", name=forced_name)]
         elif tool_choice == "required":
-            lines.append("\nYou MUST use at least one tool to answer this query.")
+            lines += ["", message("tools.required")]
 
         final_prompt = "\n".join(lines)
-        if len(final_prompt) > self.settings.tool_emulation_max_tool_schema_chars:
-            final_prompt = (
-                final_prompt[: self.settings.tool_emulation_max_tool_schema_chars - 3]
-                + "..."
-            )
-
+        cap_total = self.settings.tool_emulation_max_tool_schema_chars
+        if len(final_prompt) > cap_total:
+            final_prompt = final_prompt[: cap_total - 3] + "..."
         return final_prompt
 
     def parse_response(
@@ -472,27 +468,10 @@ class ToolEmulationPipeline:
         return None
 
     def build_correction_prompt(self, base_prompt: str) -> str:
-        return (
-            base_prompt
-            + "\n\nYou attempted to use a tool, but the format was invalid or incomplete. You MUST strictly use the requested JSON format enclosed in <<<TOOL_CALLS>>> and <<<END_TOOL_CALLS>>>."
-        )
+        return base_prompt + message("tools.correction", begin=_BEGIN, end=_END)
 
     def looks_like_bypass(self, text: str) -> bool:
-        if not text:
-            return False
-        patterns = [
-            r"teams\.microsoft\.com|sharepoint|\boffice\.com\b|loop\.|asyncgw|\bsandbox\b",
-            r"copiarlo|copialo|copia (?:il|qui)|incolla|paste it|copy (?:it|the file)",
-            r"caricar|carica il file|nella mia|in my (?:sandbox|canvas|environment)",
-            r"copy[\- ]?paste|paste (?:it|the|this)|copia[\- ]?incolla",
-            r"(?:don'?t|do not|non) (?:have|hanno|ho) (?:the )?(?:same |stesso )?access",
-            r"the write tool|can'?t write|cannot write|non posso scrivere|salvalo (?:tu|nel)|save it (?:yourself|manually|to)",
-            r"microsoft (?:enterprise )?copilot|enterprise copilot|i'?m not claude code",
-            r"i (?:don'?t|do not) have access to (?:your |the )?(?:local )?(?:file ?system|filesystem|tools)",
-            r"non ho accesso (?:al|ai|diretto)|different runtime|run (?:this|it).{0,20}claude code",
-            r"i can'?t do this task|cannot do this task|those are claude code|enterprise search",
-        ]
-        return bool(re.search("|".join(patterns), text, re.IGNORECASE))
+        return _looks_like_bypass(text)
 
     def has_tool_block_heuristic(self, text: str) -> bool:
         return bool(re.search(r"<<<TOOL_CALLS>>>|```(?:json|tool_calls)", text))

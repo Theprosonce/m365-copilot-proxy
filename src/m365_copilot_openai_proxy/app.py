@@ -248,7 +248,9 @@ def create_app(
                     tone,
                     normalized_tools,
                     images=images,
-                    workspace_root=_project_hint(request.messages) or os.getcwd(),
+                    # No reliable project root -> None so paths are NOT rewritten to the server's
+                    # CWD; the client executes the calls against its own workspace.
+                    workspace_root=_project_hint(request.messages) or None,
                 )
             else:
                 calls, text = (
@@ -439,7 +441,9 @@ def create_app(
                     tone,
                     normalized_tools,
                     images=images,
-                    workspace_root=_project_hint(request.messages) or os.getcwd(),
+                    # No reliable project root -> None so paths are NOT rewritten to the server's
+                    # CWD; the client executes the calls against its own workspace.
+                    workspace_root=_project_hint(request.messages) or None,
                 )
             else:
                 calls, text = (
