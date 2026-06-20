@@ -41,7 +41,7 @@ from .translator import (
     translate_openai_request,
     translate_responses_request,
 )
-from .tool_middleware.pipeline import ToolMiddlewarePipeline
+from middleware.pipeline import ToolMiddlewarePipeline
 
 
 def _debug_dump(label: str, content: str) -> None:

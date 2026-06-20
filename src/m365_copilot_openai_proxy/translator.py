@@ -15,7 +15,7 @@ from .models import (
     OpenAIResponsesRequest,
     TranslatedRequest,
 )
-from .tool_middleware.bypass import looks_like_bypass
+from middleware.bypass import looks_like_bypass
 
 
 def flatten_content(content: str | list[ContentPart] | None) -> str:

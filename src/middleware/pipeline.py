@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..config import Settings
-from ..models import AnthropicMessagesRequest, OpenAIChatRequest
+from m365_copilot_openai_proxy.config import Settings
+from m365_copilot_openai_proxy.models import AnthropicMessagesRequest, OpenAIChatRequest
 from .adapters import (
     anthropic_tools_to_standard,
     openai_functions_to_standard,

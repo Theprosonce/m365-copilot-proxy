@@ -33,7 +33,7 @@ build-backend = "hatchling.build"
 path = "src/m365_copilot_openai_proxy/__init__.py"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/m365_copilot_openai_proxy"]
+packages = ["src/m365_copilot_openai_proxy", "src/middleware"]
 
 # Ship the non-Python config data (capture-derived protocol payload + prompt message bundle).
 [tool.hatch.build.targets.wheel.force-include]

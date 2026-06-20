@@ -51,7 +51,7 @@ Checks the native backend first. If the backend explicitly reports it can execut
 
 ## Internal model layer
 
-The protocol-neutral model layer lives under `src/m365_copilot_openai_proxy/tool_middleware/`:
+The protocol-neutral model layer lives under `src/middleware/`:
 
 - `models.py` defines the internal dataclasses:
   - `StandardToolDefinition`

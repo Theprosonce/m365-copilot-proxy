@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from m365_copilot_openai_proxy.tool_middleware.runtime_bridge import (
+from middleware.runtime_bridge import (
     RuntimeBridge,
     _BEGIN,
     _END,

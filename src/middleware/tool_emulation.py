@@ -6,9 +6,9 @@ import uuid
 from pathlib import Path
 from typing import Any, Tuple
 
-from ..config import Settings
-from ..messages import message
-from ..models import OpenAIChatRequest, ToolCall, FunctionCall
+from m365_copilot_openai_proxy.config import Settings
+from m365_copilot_openai_proxy.messages import message
+from m365_copilot_openai_proxy.models import OpenAIChatRequest, ToolCall, FunctionCall
 from .bypass import looks_like_bypass as _looks_like_bypass
 
 logger = logging.getLogger(__name__)

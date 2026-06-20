@@ -21,7 +21,7 @@ import pytest
 
 from m365_copilot_openai_proxy.config import Settings
 from m365_copilot_openai_proxy.models import ToolCall
-from m365_copilot_openai_proxy.tool_middleware.tool_emulation import (
+from middleware.tool_emulation import (
     ToolEmulationPipeline,
 )
 
