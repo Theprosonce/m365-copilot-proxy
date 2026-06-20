@@ -6,7 +6,7 @@ This project runs a local FastAPI proxy that talks to the same `substrate.office
 
 No Azure app registration. No admin consent. Sign in with your normal M365 Copilot browser session.
 
-> Fork of [kuchris/m365-copilot-openai-proxy](https://github.com/kuchris/m365-copilot-openai-proxy), extended with a model picker, vision, a tool-calling shim, temporary chats, and a session-management API.
+> Fork of [kuchris/m365-copilot-openai-proxy](https://github.com/kuchris/m365-copilot-openai-proxy), extended with a model picker, vision, protocol-neutral tool middleware, temporary chats, and a session-management API.
 
 ## Why Use This
 
@@ -17,7 +17,7 @@ No Azure app registration. No admin consent. Sign in with your normal M365 Copil
 - **Model picker** — choose Claude Opus or GPT‑5.5 (quick / reasoning) via the model name
 - **Work / Web grounding** toggle
 - **Vision** — forwards images (OpenAI `image_url` base64 and VS Code attachments) to Copilot
-- **Tool-calling shim** — a ReAct bridge so agentic clients (OpenCode, VS Code, Claude Code) can drive tools, even though Copilot returns only text
+- **Tool middleware** — a protocol-neutral tool layer with a ReAct emulation backend so agentic clients (OpenCode, VS Code, Claude Code) can drive tools, even though Copilot returns only text
 - **Temporary chats** by default — proxy conversations are not saved to your Copilot history and produce no memories
 - **Per-chat persistence** in SQLite, plus a CRUD API over the tracked conversations
 - Supports OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages style requests
@@ -218,7 +218,7 @@ $env:ANTHROPIC_API_KEY = "dummy"
 claude
 ```
 
-Claude Code note: agentic tool use works through a best-effort ReAct **tool-calling shim** (see below). Copilot returns only text, so the proxy injects the tool schemas into the prompt and parses the model's reply back into `tool_calls`. It is functional but less reliable than a model with native function calling.
+Claude Code note: agentic tool use currently works through the middleware's best-effort ReAct **emulation backend** (see below). Copilot returns only text, so the proxy injects the tool schemas into the prompt and parses the model's reply back into `tool_calls`. It is functional but less reliable than a model with native function calling.
 
 ### VS Code
 
@@ -272,7 +272,7 @@ Point Claude Code at the proxy's Anthropic-compatible endpoint. In your workspac
 }
 ```
 
-Claude Code then routes its requests through the proxy (using the tool-calling shim). The same env vars work from a terminal (`$env:ANTHROPIC_BASE_URL = ...; claude`).
+Claude Code then routes its requests through the proxy (using the tool middleware emulation backend). The same env vars work from a terminal (`$env:ANTHROPIC_BASE_URL = ...; claude`).
 
 ## Persistent Sessions
 
@@ -369,9 +369,11 @@ Example:
 | `DELETE /v1/chats/{key}` | Forget a mapping |
 | `GET /docs`, `GET /openapi.json` | Interactive OpenAPI docs and schema |
 
-### Tool-calling shim
+### Tool middleware
 
-Microsoft 365 Copilot returns plain text and has no native function calling. To let agentic clients work, the proxy injects the client's tool schemas into the prompt (with a strict sentinel-delimited output contract) and parses the model's reply back into OpenAI `tool_calls` / Anthropic `tool_use`. This is best-effort: the model may ignore the format, so the proxy verifies and asks for a correction. Send your tools as usual on `/v1/chat/completions` or `/v1/messages`.
+Microsoft 365 Copilot returns plain text and has no native function calling. To let agentic clients work, the proxy routes OpenAI and Anthropic tool definitions through a protocol-neutral middleware layer. The default `emulation` backend injects the client's tool schemas into the prompt (with a strict sentinel-delimited output contract) and parses the model's reply back into OpenAI `tool_calls` / Anthropic `tool_use`. This is best-effort: the model may ignore the format, so the proxy verifies and asks for a correction. Send your tools as usual on `/v1/chat/completions`, `/v1/responses`, or `/v1/messages`.
+
+The middleware has an explicit native backend seam for future real tool execution. `M365_TOOL_MIDDLEWARE_MODE=native` is intentionally separate from emulation and does not grant arbitrary local execution by itself. See [docs/TOOL_MIDDLEWARE.md](docs/TOOL_MIDDLEWARE.md) for modes, internal models, security boundaries, and unsupported areas.
 
 ### Vision
 
@@ -462,12 +464,16 @@ Most users only need `.env` after the proxy captures a token.
 | `M365_OPEN_TIMEOUT` | `30` | WebSocket handshake timeout (seconds). |
 | `M365_EDGE_PATH` | Browser default path | Browser executable used for the debug token-capture window. |
 | `M365_DEBUG` | unset | When set, writes request/response diagnostics to `debug.log`. |
+| `M365_TOOL_MIDDLEWARE_ENABLED` | `true` | Enables the protocol-neutral tool middleware facade. Set `false` to bypass middleware without changing legacy emulation settings. |
+| `M365_TOOL_MIDDLEWARE_MODE` | `emulation` | Tool middleware mode: `off`, `emulation`, `native`, or `auto`. `emulation` preserves current behavior; `native` is a separate backend seam; `auto` prefers native only when a configured backend can execute. |
+| `M365_TOOL_EMULATION_ENABLED` | `true` | Enables the prompt/sentinel emulation backend used by default middleware mode. |
+| `M365_TOOL_EMULATION_FORCE_NON_STREAMING` | `true` | Forces a non-streaming upstream turn while emulating tool calls, then wraps the result back into the requested streaming shape when needed. |
 
 ## Limitations
 
 - This is an unofficial local proxy over the browser-facing M365 Copilot API, reverse-engineered from the web client. The captured protocol (in `substrate.json`) can break without notice.
 - Token refresh depends on a signed-in browser profile.
-- Tool calling is a best-effort prompt shim, not native function calling — it can fail or misformat.
+- Tool calling currently defaults to best-effort prompt emulation, not native Copilot function calling — it can fail or misformat.
 - Token usage numbers are placeholders.
 - System prompts and prior conversation history are translated into plain text context.
 - Vision depends on the client sending the image bytes; some clients only send a reference or nothing.

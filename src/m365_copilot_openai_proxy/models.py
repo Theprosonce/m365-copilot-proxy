@@ -140,6 +140,13 @@ class OpenAIResponsesRequest(BaseModel):
     input: str | list[Any]
     instructions: str | None = None
     stream: bool = False
+    temperature: float | None = None
+    user: str | None = None
+    tools: list[dict[str, Any]] | None = None
+    tool_choice: Any | None = None
+    # Accept legacy Chat Completions-style fields used by some OpenAI-compatible coding clients.
+    functions: list[dict[str, Any]] | None = None
+    function_call: Any | None = None
 
 
 class TranslatedRequest(BaseModel):

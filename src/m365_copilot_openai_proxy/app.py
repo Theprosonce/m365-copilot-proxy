@@ -30,6 +30,7 @@ from .models import (
     DeleteResponse,
     ExtractedImage,
     OpenAIChatRequest,
+    OpenAIMessage,
     OpenAIResponsesRequest,
 )
 from .translator import (
@@ -40,7 +41,7 @@ from .translator import (
     translate_openai_request,
     translate_responses_request,
 )
-from .tool_middleware.tool_emulation import ToolEmulationPipeline
+from .tool_middleware.pipeline import ToolMiddlewarePipeline
 
 
 def _debug_dump(label: str, content: str) -> None:
@@ -199,11 +200,11 @@ def create_app(
         )
         try:
             await _debug_raw(raw_request)
-            pipeline = ToolEmulationPipeline(settings)
+            pipeline = ToolMiddlewarePipeline(settings)
 
             original_stream = request.stream
-            is_emulating = pipeline.is_emulation_active(request)
-            request, tools_prompt, normalized_tools = pipeline.preflight(request)
+            is_emulating = pipeline.is_openai_active(request)
+            request, tools_prompt, normalized_tools = pipeline.preflight_openai(request)
 
             translated = translate_openai_request(request)
             session = _persistent_session(
@@ -316,9 +317,35 @@ def create_app(
         body = await raw.json()
         try:
             request = OpenAIResponsesRequest.model_validate(body)
+            pipeline = ToolMiddlewarePipeline(settings)
+            original_stream = request.stream
             translated = translate_responses_request(request)
-            session = _persistent_session(app, raw, request.model)
+            proxy_request = OpenAIChatRequest(
+                model=request.model,
+                messages=[OpenAIMessage(role="user", content=translated.prompt)],
+                stream=request.stream,
+                temperature=request.temperature,
+                user=request.user,
+                tools=request.tools,
+                tool_choice=request.tool_choice,
+                functions=request.functions,
+                function_call=request.function_call,
+            )
+            is_emulating = pipeline.is_openai_active(proxy_request)
+            proxy_request, tools_prompt, normalized_tools = pipeline.preflight_openai(
+                proxy_request
+            )
+            request.stream = proxy_request.stream
+            session = _persistent_session(app, raw, request.model, request.user)
             tone = resolve_tone(request.model)
+            ctx = list(translated.additional_context)
+            prompt = translated.prompt
+            if tools_prompt:
+                ctx = [c for c in ctx if not c.startswith("System instructions:")]
+                prompt = (
+                    f"{tools_prompt}\n\n"
+                    f"# Conversation / current request\n{translated.prompt}"
+                )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -327,8 +354,8 @@ def create_app(
                 _responses_stream(
                     settings.model_alias,
                     client,
-                    translated.prompt,
-                    translated.additional_context,
+                    prompt,
+                    ctx,
                     session,
                     tone,
                 ),
@@ -336,26 +363,46 @@ def create_app(
             )
 
         try:
-            text = await client.chat(
-                translated.prompt, translated.additional_context, session, tone
-            )
+            if is_emulating:
+                calls, text = await pipeline.execute_upstream(
+                    client,
+                    prompt,
+                    ctx,
+                    session,
+                    tone,
+                    normalized_tools,
+                    workspace_root=os.getcwd(),
+                )
+            else:
+                calls, text = None, await client.chat(prompt, ctx, session, tone)
         except SubstrateCopilotError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 
+        if original_stream:
+            return StreamingResponse(
+                _responses_emulated_stream(settings.model_alias, calls, text),
+                media_type="text/event-stream",
+            )
+
+        output = (
+            _responses_output_from_tool_calls(calls)
+            if calls
+            else [
+                {
+                    "type": "message",
+                    "id": f"msg_{uuid.uuid4().hex}",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": text}],
+                }
+            ]
+        )
         return JSONResponse(
             {
                 "id": f"resp_{uuid.uuid4().hex}",
                 "object": "response",
                 "created_at": int(time.time()),
                 "model": settings.model_alias,
-                "output": [
-                    {
-                        "type": "message",
-                        "id": f"msg_{uuid.uuid4().hex}",
-                        "role": "assistant",
-                        "content": [{"type": "output_text", "text": text}],
-                    }
-                ],
+                "output": output,
                 "usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
             }
         )
@@ -386,25 +433,12 @@ def create_app(
             )
         client = get_copilot_client()
         try:
-            pipeline = ToolEmulationPipeline(settings)
+            pipeline = ToolMiddlewarePipeline(settings)
 
-            is_emulating = pipeline.is_emulation_active(
-                OpenAIChatRequest(
-                    model=request.model,
-                    messages=[],
-                    tools=request.tools,
-                    tool_choice=request.tool_choice,
-                )
-            )
-            dummy_req = OpenAIChatRequest(
-                model=request.model,
-                messages=[],
-                tools=request.tools,
-                tool_choice=request.tool_choice,
-            )
-            dummy_req, tools_prompt, normalized_tools = pipeline.preflight(dummy_req)
+            is_emulating = pipeline.is_anthropic_active(request)
+            _dummy_req, tools_prompt, normalized_tools = pipeline.preflight_anthropic(request)
             original_stream = getattr(request, "stream", False)
-            if is_emulating and pipeline.settings.tool_emulation_force_non_streaming:
+            if is_emulating and pipeline.force_non_streaming:
                 request.stream = False
 
             translated = translate_anthropic_request(request)
@@ -501,6 +535,20 @@ def create_app(
 
     return app
 
+
+def _responses_output_from_tool_calls(calls: list | None) -> list[dict]:
+    output: list[dict] = []
+    for call in calls or []:
+        output.append(
+            {
+                "type": "function_call",
+                "id": f"fc_{uuid.uuid4().hex}",
+                "call_id": getattr(call, "id", ""),
+                "name": call.function.name,
+                "arguments": call.function.arguments,
+            }
+        )
+    return output
 
 def _args_obj(arguments: str) -> dict:
     try:
@@ -801,6 +849,69 @@ async def _responses_stream(
     yield f"data: {json.dumps({'type': 'response.output_text.done', 'item_id': item_id, 'output_index': 0, 'content_index': 0, 'text': full_text})}\n\n"
     yield f"data: {json.dumps({'type': 'response.completed', 'response': {'id': resp_id, 'object': 'response', 'created_at': created, 'model': model_alias, 'status': 'completed', 'output': [{'id': item_id, 'type': 'message', 'role': 'assistant', 'content': [{'type': 'output_text', 'text': full_text}]}], 'usage': {'input_tokens': 0, 'output_tokens': 0, 'total_tokens': 0}}})}\n\n"
 
+
+async def _responses_emulated_stream(
+    model_alias: str,
+    calls: list | None,
+    text: str,
+) -> AsyncIterator[str]:
+    resp_id = f"resp_{uuid.uuid4().hex}"
+    created = int(time.time())
+    output = (
+        _responses_output_from_tool_calls(calls)
+        if calls
+        else [
+            {
+                "type": "message",
+                "id": f"msg_{uuid.uuid4().hex}",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": text}],
+            }
+        ]
+    )
+    yield (
+        "data: "
+        + json.dumps(
+            {
+                "type": "response.created",
+                "response": {
+                    "id": resp_id,
+                    "object": "response",
+                    "created_at": created,
+                    "model": model_alias,
+                    "status": "in_progress",
+                    "output": [],
+                },
+            }
+        )
+        + "\n\n"
+    )
+    for index, item in enumerate(output):
+        yield (
+            "data: "
+            + json.dumps(
+                {"type": "response.output_item.added", "output_index": index, "item": item}
+            )
+            + "\n\n"
+        )
+    yield (
+        "data: "
+        + json.dumps(
+            {
+                "type": "response.completed",
+                "response": {
+                    "id": resp_id,
+                    "object": "response",
+                    "created_at": created,
+                    "model": model_alias,
+                    "status": "completed",
+                    "output": output,
+                    "usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
+                },
+            }
+        )
+        + "\n\n"
+    )
 
 async def _anthropic_stream(
     model_alias: str,

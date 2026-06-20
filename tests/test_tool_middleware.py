@@ -79,7 +79,7 @@ def test_parse_valid_tool_call(settings: Settings) -> None:
         }
     ]
 
-    text = 'Here is my tool call:\n<<<TOOL_CALLS>>>\n[{"name": "get_weather", "arguments": {"location": "London"}}]\n<<<END_TOOL_CALLS>>>\n'
+    text = '<<<TOOL_CALLS>>>\n[{"name": "get_weather", "arguments": {"location": "London"}}]\n<<<END_TOOL_CALLS>>>\n'
     calls = pipeline.parse_response(text, tools)
 
     assert calls is not None
@@ -93,7 +93,7 @@ def test_parse_ignores_invalid_json(settings: Settings) -> None:
     pipeline = ToolEmulationPipeline(settings)
     tools = [{"name": "get_weather"}]
 
-    text = "Here is my tool call:\n<<<TOOL_CALLS>>>\nnot json\n<<<END_TOOL_CALLS>>>\n"
+    text = "<<<TOOL_CALLS>>>\nnot json\n<<<END_TOOL_CALLS>>>\n"
     calls = pipeline.parse_response(text, tools)
     assert calls is None
 
@@ -152,7 +152,7 @@ def test_tool_rejection_missing_args(settings: Settings) -> None:
         }
     ]
 
-    text = 'Here is my tool call:\n<<<TOOL_CALLS>>>\n[{"name": "get_weather", "arguments": {}}]\n<<<END_TOOL_CALLS>>>\n'
+    text = '<<<TOOL_CALLS>>>\n[{"name": "get_weather", "arguments": {}}]\n<<<END_TOOL_CALLS>>>\n'
     calls = pipeline.parse_response(text, tools)
     assert calls is None  # should be rejected because 'location' is missing
 
@@ -170,7 +170,7 @@ def test_tool_rejection_invalid_type(settings: Settings) -> None:
         }
     ]
 
-    text = 'Here is my tool call:\n<<<TOOL_CALLS>>>\n[{"name": "get_weather", "arguments": {"location": 123}}]\n<<<END_TOOL_CALLS>>>\n'
+    text = '<<<TOOL_CALLS>>>\n[{"name": "get_weather", "arguments": {"location": 123}}]\n<<<END_TOOL_CALLS>>>\n'
     calls = pipeline.parse_response(text, tools)
     assert calls is None  # should be rejected because 'location' is an int, not string
 
@@ -179,7 +179,7 @@ def test_tool_rejection_unknown_tool(settings: Settings) -> None:
     pipeline = ToolEmulationPipeline(settings)
     tools = [{"name": "get_weather"}]
 
-    text = 'Here is my tool call:\n<<<TOOL_CALLS>>>\n[{"name": "unknown_tool", "arguments": {}}]\n<<<END_TOOL_CALLS>>>\n'
+    text = '<<<TOOL_CALLS>>>\n[{"name": "unknown_tool", "arguments": {}}]\n<<<END_TOOL_CALLS>>>\n'
     calls = pipeline.parse_response(text, tools)
     assert calls is None  # should be rejected because 'unknown_tool' doesn't exist
 
@@ -206,7 +206,7 @@ def test_tool_rejection_invalid_enum(settings: Settings) -> None:
         }
     ]
 
-    text = 'Here is my tool call:\n<<<TOOL_CALLS>>>\n[{"name": "get_weather", "arguments": {"unit": "K"}}]\n<<<END_TOOL_CALLS>>>\n'
+    text = '<<<TOOL_CALLS>>>\n[{"name": "get_weather", "arguments": {"unit": "K"}}]\n<<<END_TOOL_CALLS>>>\n'
     calls = pipeline.parse_response(text, tools)
     assert calls is None  # should be rejected because 'K' is not in ['C', 'F']
 

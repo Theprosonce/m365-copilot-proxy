@@ -267,6 +267,64 @@ class ToolEmulationPipeline:
             final_prompt = final_prompt[: cap_total - 3] + "..."
         return final_prompt
 
+    def _extract_delimited_block(self, text: str) -> str | None:
+        """Strict two-phase extraction of the tool-call payload.
+
+        Phase 1 (gate): the response must literally BEGIN with the
+        ``<<<TOOL_CALLS>>>`` marker (leading whitespace tolerated). The rendered
+        protocol contract is that a tool-calling turn is nothing but the
+        delimited block, so a well-formed reply starts with the marker. If the
+        marker only appears mid-sentence (e.g. "I will use <<<TOOL_CALLS>>>"),
+        there is no tool call here: bail out and let the caller treat the text as
+        ordinary prose instead of mis-parsing the mention.
+
+        Phase 2 (capture): scan from the END of the response for the matching
+        ``<<<END_TOOL_CALLS>>>`` delimiter and return the payload between them.
+        Bounding with the *last* closer is robust against a model that echoes the
+        opening marker inside its JSON or tacks on trailing chatter.
+
+        Returns the stripped payload string, or ``None`` when no strict block is
+        present (the caller then redacts any stray sentinel before replying).
+        """
+        if not text:
+            return None
+        # Phase 1: the block must sit at the very start of the response.
+        if not text.lstrip().startswith(_BEGIN):
+            return None
+        # Phase 2: bound the payload with the final closing delimiter.
+        end = text.rfind(_END)
+        if end < 0:
+            # Opening marker present but the block never closed -> malformed.
+            # Refuse to parse; the redaction layer scrubs the raw marker.
+            return None
+        start = text.find(_BEGIN)
+        return text[start + len(_BEGIN) : end].strip()
+
+    def _redact_tool_sentinels(self, text: str) -> str:
+        """Strip every trace of the internal tool-call sentinels from ``text``.
+
+        Guarantees the raw ``<<<TOOL_CALLS>>>`` / ``<<<END_TOOL_CALLS>>>`` wire
+        tokens never reach the end user. A complete delimited block is removed as
+        a unit; any sentinel left dangling (a malformed block, or a stray mention
+        in conversational prose) is then scrubbed individually, and the orphaned
+        whitespace is tidied up so the message has no blank gaps.
+        """
+        if not text:
+            return text
+        # 1. Drop complete blocks (DOTALL; non-greedy so each END closes its own
+        #    block, sweeping up trailing whitespace too).
+        scrubbed = re.sub(
+            re.escape(_BEGIN) + r".*?" + re.escape(_END) + r"\s*",
+            "",
+            text,
+            flags=re.DOTALL,
+        )
+        # 2. Remove any sentinel left without a matching partner.
+        scrubbed = scrubbed.replace(_BEGIN, "").replace(_END, "")
+        # 3. Collapse whitespace orphaned by the removals.
+        scrubbed = re.sub(r"[ \t]{2,}", " ", scrubbed)
+        return scrubbed.strip()
+
     def parse_response(
         self, text: str, tools: list[dict[str, Any]], workspace_root: str | None = None
     ) -> list[ToolCall] | None:
@@ -276,13 +334,13 @@ class ToolEmulationPipeline:
         text = text[: self.settings.tool_emulation_max_parse_chars]
         calls_data = None
 
-        # 1. Delimiter First
+        # 1. Delimiter First — STRICT: the response must begin with the marker.
+        #   See _extract_delimited_block: a mid-sentence mention of the sentinel
+        #   is NOT a tool call and must not be parsed as one.
         if self.settings.tool_emulation_parser_mode == "delimiter_first":
-            m = re.search(
-                r"<<<TOOL_CALLS>>>\s*(.*?)\s*<<<END_TOOL_CALLS>>>", text, re.DOTALL
-            )
-            if m:
-                calls_data = self._try_parse_json(m.group(1))
+            payload = self._extract_delimited_block(text)
+            if payload is not None:
+                calls_data = self._try_parse_json(payload)
 
         # 2. Fenced JSON (Markdown recovery)
         if (
@@ -474,7 +532,18 @@ class ToolEmulationPipeline:
         return _looks_like_bypass(text)
 
     def has_tool_block_heuristic(self, text: str) -> bool:
-        return bool(re.search(r"<<<TOOL_CALLS>>>|```(?:json|tool_calls)", text))
+        """Heuristic: did the model make a GENUINE attempt at the tool protocol?
+
+        Used to decide whether a single correction retry is worthwhile. This must
+        agree with ``_extract_delimited_block``'s strict contract: a real (if
+        malformed) tool block *starts* with the sentinel, whereas a mid-sentence
+        mention of ``<<<TOOL_CALLS>>>`` in conversational prose does NOT count and
+        must not trigger a retry. The fenced-JSON shape is still treated as a
+        genuine attempt because the model followed the structure, just in markdown.
+        """
+        if text and text.lstrip().startswith(_BEGIN):
+            return True
+        return bool(re.search(r"```(?:json|tool_calls)", text))
 
     async def execute_upstream(
         self,
@@ -514,4 +583,9 @@ class ToolEmulationPipeline:
                 text, normalized_tools, workspace_root=workspace_root
             )
 
-        return calls, text
+        # Guarantee no internal wire token ever reaches the user. When calls were
+        # extracted the caller ignores `text`; when they weren't, `text` is the
+        # surfaced reply and may still carry the sentinel (a malformed block, a
+        # dangling open marker, or a stray mention). Scrubbing in every case is a
+        # belt-and-braces redaction: callers never see the raw sentinel.
+        return calls, self._redact_tool_sentinels(text)

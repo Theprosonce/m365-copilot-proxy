@@ -62,6 +62,16 @@ class Settings(BaseSettings):
     # instead of the OAuth subscription token.
     anthropic_key: str = Field(default="", alias="M365_ANTHROPIC_KEY")
 
+    # Tool Middleware Policy
+    # This is the protocol-neutral facade namespace for real/native tool-model support.
+    # The current default keeps behavior delegated to the existing emulation backend.
+    tool_middleware_enabled: bool = Field(
+        default=True, alias="M365_TOOL_MIDDLEWARE_ENABLED"
+    )
+    tool_middleware_mode: str = Field(
+        default="emulation", alias="M365_TOOL_MIDDLEWARE_MODE"
+    )
+
     # Tool Emulation Policy
     tool_emulation_enabled: bool = Field(
         default=True, alias="M365_TOOL_EMULATION_ENABLED"

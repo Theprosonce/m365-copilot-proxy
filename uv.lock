@@ -167,7 +167,6 @@ wheels = [
 
 [[package]]
 name = "m365-copilot-openai-proxy"
-version = "0.6.0"
 source = { editable = "." }
 dependencies = [
     { name = "customtkinter" },
