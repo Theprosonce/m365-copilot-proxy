@@ -67,13 +67,14 @@ def _parse_properties(text: str) -> dict[str, str]:
 def _catalog() -> dict[str, str]:
     override = os.environ.get("M365_PROMPT_CATALOG")
     if override:
-        text = Path(override).read_text(encoding="utf-8")
+        path = Path(override)
     else:
-        text = (
-            resources.files(__package__)
-            .joinpath("messages.properties")
-            .read_text(encoding="utf-8")
-        )
+        path = Path("./prompts/messages.properties")
+    
+    if not path.exists():
+        raise FileNotFoundError(f"Prompts catalog file not found at {path.absolute()}")
+        
+    text = path.read_text(encoding="utf-8")
     return _parse_properties(text)
 
 

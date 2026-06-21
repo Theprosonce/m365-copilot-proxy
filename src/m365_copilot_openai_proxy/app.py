@@ -228,8 +228,12 @@ def create_app(
                     "REQUEST",
                     f"tools={tool_names}\ntool_choice={request.tool_choice}\nctx={json.dumps(ctx, ensure_ascii=False)[:4000]}",
                 )
+                from middleware.tool_emulation import _INJECTION_CONTENT
+                clean_prompt = translated.prompt
+                if _INJECTION_CONTENT.strip() and clean_prompt.startswith(_INJECTION_CONTENT + "\n---\n"):
+                    clean_prompt = clean_prompt[len(_INJECTION_CONTENT + "\n---\n"):]
                 # Put the protocol IN the user turn
-                prompt = f"{tools_prompt}\n\n# Conversation / current request\n{translated.prompt}"
+                prompt = f"{tools_prompt}\n\n# Conversation / current request\n{clean_prompt}"
                 _debug_dump("FINAL PROMPT", prompt[:6000])
 
             if request.stream:
@@ -335,6 +339,8 @@ def create_app(
             proxy_request, tools_prompt, normalized_tools = pipeline.preflight_openai(
                 proxy_request
             )
+            if proxy_request.messages and isinstance(proxy_request.messages[0].content, str):
+                translated.prompt = proxy_request.messages[0].content
             request.stream = proxy_request.stream
             session = _persistent_session(app, raw, request.model, request.user)
             tone = resolve_tone(request.model)
@@ -342,9 +348,13 @@ def create_app(
             prompt = translated.prompt
             if tools_prompt:
                 ctx = [c for c in ctx if not c.startswith("System instructions:")]
+                from middleware.tool_emulation import _INJECTION_CONTENT
+                clean_prompt = translated.prompt
+                if _INJECTION_CONTENT.strip() and clean_prompt.startswith(_INJECTION_CONTENT + "\n---\n"):
+                    clean_prompt = clean_prompt[len(_INJECTION_CONTENT + "\n---\n"):]
                 prompt = (
                     f"{tools_prompt}\n\n"
-                    f"# Conversation / current request\n{translated.prompt}"
+                    f"# Conversation / current request\n{clean_prompt}"
                 )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -456,7 +466,11 @@ def create_app(
             )
             if tools_prompt:
                 ctx = [c for c in ctx if not c.startswith("System instructions:")]
-                prompt = f"{tools_prompt}\n\n# Conversation / current request\n{translated.prompt}"
+                from middleware.tool_emulation import _INJECTION_CONTENT
+                clean_prompt = translated.prompt
+                if _INJECTION_CONTENT.strip() and clean_prompt.startswith(_INJECTION_CONTENT + "\n---\n"):
+                    clean_prompt = clean_prompt[len(_INJECTION_CONTENT + "\n---\n"):]
+                prompt = f"{tools_prompt}\n\n# Conversation / current request\n{clean_prompt}"
 
             if request.stream:
                 return StreamingResponse(
@@ -575,8 +589,15 @@ _ANY_PATH_RE = re.compile(r"([A-Za-z]:[\\/][^\s\"'`<>\n]{2,}|/[A-Za-z0-9._\-/]{3
 def _msg_text(m) -> str:
     content = getattr(m, "content", "")
     if isinstance(content, list):
-        return " ".join(getattr(p, "text", "") or "" for p in content)
-    return str(content or "")
+        text = " ".join(getattr(p, "text", "") or "" for p in content)
+    else:
+        text = str(content or "")
+
+    if "\n---\n" in text:
+        from middleware.pipeline import _INJECTION_CONTENT
+        if _INJECTION_CONTENT.strip() and text.startswith(_INJECTION_CONTENT + "\n---\n"):
+            text = text[len(_INJECTION_CONTENT + "\n---\n"):]
+    return text
 
 
 def _project_hint(messages: list) -> str:

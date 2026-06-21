@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from m365_copilot_openai_proxy.config import Settings
@@ -12,9 +13,11 @@ from .adapters import (
 )
 from .models import ToolMiddlewareContext
 from .native_backend import NativeToolBackend, NoopNativeToolBackend
-from .tool_emulation import ToolEmulationPipeline
+from .tool_emulation import ToolEmulationPipeline, _apply_message_injection, _INJECTION_CONTENT
 
 _SUPPORTED_MODES = {"off", "emulation", "auto", "native"}
+
+logger = logging.getLogger(__name__)
 
 
 class ToolMiddlewarePipeline:
@@ -88,6 +91,7 @@ class ToolMiddlewarePipeline:
     def preflight_openai(
         self, request: OpenAIChatRequest
     ) -> tuple[OpenAIChatRequest, str | None, list[dict[str, Any]]]:
+        _apply_message_injection(request.messages)
         normalized_tools = self.emulation._normalize_tools(request)
         if not self._middleware_enabled():
             return request, None, normalized_tools
@@ -123,6 +127,7 @@ class ToolMiddlewarePipeline:
     def preflight_anthropic(
         self, request: AnthropicMessagesRequest
     ) -> tuple[OpenAIChatRequest, str | None, list[dict[str, Any]]]:
+        _apply_message_injection(request.messages)
         proxy_request = self.openai_proxy_request_from_anthropic(request)
         if not self._middleware_enabled():
             return proxy_request, None, self.emulation._normalize_tools(proxy_request)

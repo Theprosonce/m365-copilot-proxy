@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import hashlib
 import re
 import uuid
@@ -16,6 +17,82 @@ logger = logging.getLogger(__name__)
 # Tool-call sentinels (kept in code: coupled to the parser regex below).
 _BEGIN = "<<<TOOL_CALLS>>>"
 _END = "<<<END_TOOL_CALLS>>>"
+
+# Load and cache tool emulation injection content at startup
+_env_path = os.environ.get("TOOL_EMULATION_INJECTION_PATH") or os.environ.get("M365_TOOL_EMULATION_INJECTION_PATH")
+if _env_path:
+    _injection_file_path = Path(_env_path)
+else:
+    _injection_file_path = Path("./prompts/tool_emulation_injection.md")
+
+if not _injection_file_path.exists():
+    raise FileNotFoundError(f"Injection file not found at {_injection_file_path.absolute()}")
+
+with _injection_file_path.open("r", encoding="utf-8") as _f:
+    _INJECTION_CONTENT = _f.read()
+
+if not _INJECTION_CONTENT.strip():
+    logger.warning(f"Injection file at {_injection_file_path.absolute()} exists but is empty.")
+
+
+def _apply_message_injection(messages: list[Any]) -> None:
+    if not _INJECTION_CONTENT.strip():
+        return
+
+    for msg in messages:
+        role = getattr(msg, "role", None)
+        if isinstance(role, str) and role.strip().lower() == "user":
+            if isinstance(msg.content, str):
+                if msg.content.startswith(_INJECTION_CONTENT + "\n---\n"):
+                    continue
+                logger.debug(
+                    f"Prepend injection length: {len(_INJECTION_CONTENT)}, first 50 chars: {repr(_INJECTION_CONTENT[:50])}"
+                )
+                msg.content = f"{_INJECTION_CONTENT}\n---\n{msg.content}"
+            elif isinstance(msg.content, list):
+                text_part = None
+                for part in msg.content:
+                    if hasattr(part, "type") and part.type == "text":
+                        text_part = part
+                        break
+                    elif isinstance(part, dict) and part.get("type") == "text":
+                        text_part = part
+                        break
+
+                if text_part is not None:
+                    if hasattr(text_part, "text"):
+                        val = text_part.text or ""
+                        if val.startswith(_INJECTION_CONTENT + "\n---\n"):
+                            continue
+                        logger.debug(
+                            f"Prepend injection length: {len(_INJECTION_CONTENT)}, first 50 chars: {repr(_INJECTION_CONTENT[:50])}"
+                        )
+                        text_part.text = f"{_INJECTION_CONTENT}\n---\n{val}"
+                    elif isinstance(text_part, dict):
+                        val = text_part.get("text") or ""
+                        if val.startswith(_INJECTION_CONTENT + "\n---\n"):
+                            continue
+                        logger.debug(
+                            f"Prepend injection length: {len(_INJECTION_CONTENT)}, first 50 chars: {repr(_INJECTION_CONTENT[:50])}"
+                        )
+                        text_part["text"] = f"{_INJECTION_CONTENT}\n---\n{val}"
+                else:
+                    logger.debug(
+                        f"Prepend injection length: {len(_INJECTION_CONTENT)}, first 50 chars: {repr(_INJECTION_CONTENT[:50])}"
+                    )
+                    if msg.content and hasattr(type(msg.content[0]), "model_fields"):
+                        from m365_copilot_openai_proxy.models import ContentPart
+                        new_part = ContentPart(type="text", text=f"{_INJECTION_CONTENT}\n---\n")
+                        msg.content.insert(0, new_part)
+                    else:
+                        new_part = {"type": "text", "text": f"{_INJECTION_CONTENT}\n---\n"}
+                        msg.content.insert(0, new_part)
+            elif msg.content is None:
+                logger.debug(
+                    f"Prepend injection length: {len(_INJECTION_CONTENT)}, first 50 chars: {repr(_INJECTION_CONTENT[:50])}"
+                )
+                msg.content = f"{_INJECTION_CONTENT}\n---\n"
+
 
 FILE_TOOLS_WITH_FILEPATH = frozenset({"read"})
 
@@ -225,35 +302,12 @@ class ToolEmulationPipeline:
             return ""
 
         lines = [
-            message("tools.intro"),
-            "",
-            message("tools.verify_first"),
-            "",
-            message("tools.project_reach"),
-            "",
-            message("tools.read_length"),
+            _INJECTION_CONTENT,
             "",
             "# Callable functions",
         ]
         for t in tools:
             lines.append(f"- {self._tool_signature(t)}")
-        lines += [
-            "",
-            "# Output protocol (MANDATORY)",
-            message("tools.protocol_intro"),
-            _BEGIN,
-            '[{"name": "<function_name>", "arguments": {<json object matching the schema>}}]',
-            _END,
-            message("tools.args_rule"),
-            message("tools.invalid_rule"),
-            message("tools.no_discuss"),
-            "",
-            "# Example",
-            message("tools.example_intro"),
-            _BEGIN,
-            '[{"name": "glob", "arguments": {"pattern": "**/*"}}]',
-            _END,
-        ]
 
         forced_name = self._forced_tool_name(tool_choice)
         if forced_name:

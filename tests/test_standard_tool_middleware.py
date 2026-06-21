@@ -298,3 +298,166 @@ def test_standard_tool_results_preserve_structured_content() -> None:
     assert openai_result.content == payload
     assert anthropic_result.tool_call_id == "toolu_123"
     assert anthropic_result.content == [payload]
+
+
+def test_tool_emulation_injection_success(tmp_path, monkeypatch) -> None:
+    import sys
+    import importlib
+    
+    injection_file = tmp_path / "tool_emulation_injection.md"
+    injection_file.write_text("Hello World from Injection", encoding="utf-8")
+    
+    monkeypatch.setenv("TOOL_EMULATION_INJECTION_PATH", str(injection_file))
+    
+    try:
+        import middleware.tool_emulation
+        import middleware.pipeline
+        importlib.reload(middleware.tool_emulation)
+        importlib.reload(middleware.pipeline)
+        
+        assert middleware.tool_emulation._INJECTION_CONTENT == "Hello World from Injection"
+        
+        pipeline = middleware.pipeline.ToolMiddlewarePipeline(
+            Settings(M365_ACCESS_TOKEN="fake")
+        )
+        request = OpenAIChatRequest(
+            model="m365-opus",
+            messages=[OpenAIMessage(role="user", content="original message")],
+        )
+        
+        new_request, prompt, tools = pipeline.preflight_openai(request)
+        assert request.messages[0].content == "Hello World from Injection\n---\noriginal message"
+    finally:
+        monkeypatch.delenv("TOOL_EMULATION_INJECTION_PATH", raising=False)
+        import middleware.tool_emulation
+        import middleware.pipeline
+        importlib.reload(middleware.tool_emulation)
+        importlib.reload(middleware.pipeline)
+
+
+def test_tool_emulation_injection_empty(tmp_path, monkeypatch) -> None:
+    import sys
+    import importlib
+    
+    injection_file = tmp_path / "tool_emulation_injection.md"
+    injection_file.write_text("", encoding="utf-8")
+    
+    monkeypatch.setenv("TOOL_EMULATION_INJECTION_PATH", str(injection_file))
+    
+    try:
+        import middleware.tool_emulation
+        import middleware.pipeline
+        importlib.reload(middleware.tool_emulation)
+        importlib.reload(middleware.pipeline)
+        
+        assert middleware.tool_emulation._INJECTION_CONTENT == ""
+        
+        pipeline = middleware.pipeline.ToolMiddlewarePipeline(
+            Settings(M365_ACCESS_TOKEN="fake")
+        )
+        request = OpenAIChatRequest(
+            model="m365-opus",
+            messages=[OpenAIMessage(role="user", content="original message")],
+        )
+        
+        new_request, prompt, tools = pipeline.preflight_openai(request)
+        assert request.messages[0].content == "original message"
+    finally:
+        monkeypatch.delenv("TOOL_EMULATION_INJECTION_PATH", raising=False)
+        import middleware.tool_emulation
+        import middleware.pipeline
+        importlib.reload(middleware.tool_emulation)
+        importlib.reload(middleware.pipeline)
+
+
+def test_tool_emulation_injection_missing(tmp_path, monkeypatch) -> None:
+    import sys
+    import importlib
+    import pytest
+    
+    monkeypatch.setenv("TOOL_EMULATION_INJECTION_PATH", "/nonexistent_path/tool_emulation_injection.md")
+    
+    try:
+        import middleware.tool_emulation
+        with pytest.raises(FileNotFoundError):
+            importlib.reload(middleware.tool_emulation)
+    finally:
+        monkeypatch.delenv("TOOL_EMULATION_INJECTION_PATH", raising=False)
+        import middleware.tool_emulation
+        import middleware.pipeline
+        importlib.reload(middleware.tool_emulation)
+        importlib.reload(middleware.pipeline)
+
+
+def test_tool_emulation_injection_content_parts(tmp_path, monkeypatch) -> None:
+    import sys
+    import importlib
+    from m365_copilot_openai_proxy.models import ContentPart
+    
+    injection_file = tmp_path / "tool_emulation_injection.md"
+    injection_file.write_text("Hello World from Injection", encoding="utf-8")
+    
+    monkeypatch.setenv("TOOL_EMULATION_INJECTION_PATH", str(injection_file))
+    
+    try:
+        import middleware.tool_emulation
+        import middleware.pipeline
+        importlib.reload(middleware.tool_emulation)
+        importlib.reload(middleware.pipeline)
+        
+        pipeline = middleware.pipeline.ToolMiddlewarePipeline(
+            Settings(M365_ACCESS_TOKEN="fake")
+        )
+        request = OpenAIChatRequest(
+            model="m365-opus",
+            messages=[
+                OpenAIMessage(
+                    role="user",
+                    content=[ContentPart(type="text", text="original content")]
+                )
+            ],
+        )
+        
+        new_request, prompt, tools = pipeline.preflight_openai(request)
+        assert request.messages[0].content[0].text == "Hello World from Injection\n---\noriginal content"
+    finally:
+        monkeypatch.delenv("TOOL_EMULATION_INJECTION_PATH", raising=False)
+        import middleware.tool_emulation
+        import middleware.pipeline
+        importlib.reload(middleware.tool_emulation)
+        importlib.reload(middleware.pipeline)
+
+
+def test_tool_emulation_injection_anthropic(tmp_path, monkeypatch) -> None:
+    import sys
+    import importlib
+    from m365_copilot_openai_proxy.models import AnthropicMessage
+    
+    injection_file = tmp_path / "tool_emulation_injection.md"
+    injection_file.write_text("Hello World from Injection", encoding="utf-8")
+    
+    monkeypatch.setenv("TOOL_EMULATION_INJECTION_PATH", str(injection_file))
+    
+    try:
+        import middleware.tool_emulation
+        import middleware.pipeline
+        importlib.reload(middleware.tool_emulation)
+        importlib.reload(middleware.pipeline)
+        
+        pipeline = middleware.pipeline.ToolMiddlewarePipeline(
+            Settings(M365_ACCESS_TOKEN="fake")
+        )
+        request = AnthropicMessagesRequest(
+            model="m365-opus",
+            messages=[AnthropicMessage(role="user", content="original Anthropic message")],
+        )
+        
+        proxy_request, prompt, tools = pipeline.preflight_anthropic(request)
+        assert request.messages[0].content == "Hello World from Injection\n---\noriginal Anthropic message"
+    finally:
+        monkeypatch.delenv("TOOL_EMULATION_INJECTION_PATH", raising=False)
+        import middleware.tool_emulation
+        import middleware.pipeline
+        importlib.reload(middleware.tool_emulation)
+        importlib.reload(middleware.pipeline)
+

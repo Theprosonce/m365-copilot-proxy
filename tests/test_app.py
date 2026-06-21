@@ -386,6 +386,9 @@ def test_cli_close_debug_browser_honors_setting(monkeypatch) -> None:
 
 
 def test_openai_chat_completion_translates_history() -> None:
+    from pathlib import Path
+    expected_injection = Path("prompts/tool_emulation_injection.md").read_text("utf-8")
+
     fake = FakeCopilotClient()
     client = build_client(fake)
     response = client.post(
@@ -405,10 +408,10 @@ def test_openai_chat_completion_translates_history() -> None:
     assert body["choices"][0]["message"]["content"] == "copilot reply"
     assert fake.calls == [
         (
-            "Second question",
+            f"{expected_injection}\n---\nSecond question",
             [
                 "System instructions:\nBe concise.",
-                "Prior conversation transcript:\nUser: First question\nAssistant: First answer",
+                f"Prior conversation transcript:\nUser: {expected_injection}\n---\nFirst question\nAssistant: First answer",
             ],
         )
     ]
@@ -821,3 +824,66 @@ def test_responses_requires_final_user_message() -> None:
         response.json()["detail"]
         == "The final Responses input message must be a user message."
     )
+
+
+def test_endpoints_with_tool_emulation_injection(tmp_path, monkeypatch) -> None:
+    import sys
+    import importlib
+    
+    injection_file = tmp_path / "tool_emulation_injection.md"
+    injection_file.write_text("CUSTOM_INJECTION_HEADER", encoding="utf-8")
+    
+    monkeypatch.setenv("TOOL_EMULATION_INJECTION_PATH", str(injection_file))
+    
+    try:
+        import middleware.tool_emulation
+        import middleware.pipeline
+        importlib.reload(middleware.tool_emulation)
+        importlib.reload(middleware.pipeline)
+        
+        fake = FakeCopilotClient()
+        client = build_client(fake)
+        
+        # Test /v1/chat/completions
+        resp1 = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "ignored",
+                "messages": [{"role": "user", "content": "Hello OpenAI"}],
+            }
+        )
+        assert resp1.status_code == 200
+        assert len(fake.calls) == 1
+        assert fake.calls[0][0].startswith("CUSTOM_INJECTION_HEADER\n---\nHello OpenAI")
+        
+        # Test /v1/messages
+        resp2 = client.post(
+            "/v1/messages",
+            json={
+                "model": "ignored",
+                "messages": [{"role": "user", "content": "Hello Anthropic"}],
+            }
+        )
+        assert resp2.status_code == 200
+        assert len(fake.calls) == 2
+        assert fake.calls[1][0].startswith("CUSTOM_INJECTION_HEADER\n---\nHello Anthropic")
+        
+        # Test /v1/responses
+        resp3 = client.post(
+            "/v1/responses",
+            json={
+                "model": "ignored",
+                "input": "Hello Responses",
+            }
+        )
+        assert resp3.status_code == 200
+        assert len(fake.calls) == 3
+        assert fake.calls[2][0].startswith("CUSTOM_INJECTION_HEADER\n---\nHello Responses")
+        
+    finally:
+        monkeypatch.delenv("TOOL_EMULATION_INJECTION_PATH", raising=False)
+        import middleware.tool_emulation
+        import middleware.pipeline
+        importlib.reload(middleware.tool_emulation)
+        importlib.reload(middleware.pipeline)
+
