@@ -71,6 +71,9 @@ class Settings(BaseSettings):
     tool_middleware_mode: str = Field(
         default="emulation", alias="M365_TOOL_MIDDLEWARE_MODE"
     )
+    tool_middleware_plugin_paths: str = Field(
+        default="", alias="M365_TOOL_MIDDLEWARE_PLUGIN_PATHS"
+    )
 
     # Tool Emulation Policy
     tool_emulation_enabled: bool = Field(

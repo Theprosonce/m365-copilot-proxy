@@ -96,6 +96,18 @@ Streaming text is supported. Streaming tool-call deltas are a separate milestone
 
 The current middleware models represent completed tool calls, not incremental tool-call deltas.
 
+
+## Runtime skills and plugins
+
+`RuntimeBridge` supports two extension mechanisms for local tool execution:
+
+- **Skills** are markdown/text instruction bundles discovered under `.claude/skills/<skill-name>/SKILL.md` or `SKILL.txt` inside the configured runtime root. The built-in `list_skills` tool returns discoverable skills, and the built-in `skill` tool loads a selected skill's content. Skill loading is read-only and uses the same sandbox path checks as file tools.
+- **Plugins** are explicit Python files passed to `RuntimeBridge(..., plugin_paths=[...])`. A plugin can expose `register(registry)` and call `registry.register(name, handler)`, or expose a `TOOLS` dictionary. Plugin handlers use the same contract as built-ins: `handler(root: Path, args: dict[str, Any]) -> (result, metadata)`.
+
+Built-in tool names are reserved, so plugins cannot override `read`, `write`, `bash`, `skill`, `list_skills`, or other bundled tools. Plugin files are resolved under the runtime root before loading. Shell execution remains separately gated by `allow_bash`.
+
+Configuration includes `M365_TOOL_MIDDLEWARE_PLUGIN_PATHS` as a comma-separated path setting for callers that want to wire plugin files from environment/configuration. The bridge constructor accepts `plugin_paths` directly; application-level wiring can parse the setting and pass the list through when enabling local execution.
+
 ## Security boundaries
 
 - The middleware facade does not grant local execution by itself.

@@ -254,6 +254,142 @@ def tool_bash(
     )
 
 
+class RuntimePluginRegistry:
+    """Registry for runtime bridge tools supplied by plugins and skills.
+
+    Plugins are explicit Python modules loaded from configured file paths. A plugin
+    module may expose either ``register(registry)`` or ``TOOLS`` as a mapping of
+    tool names to handlers. Handlers use the same contract as built-in tools:
+    ``handler(root: Path, args: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]``.
+    """
+
+    def __init__(self) -> None:
+        self._tools: dict[str, Any] = {}
+
+    @property
+    def tools(self) -> dict[str, Any]:
+        return dict(self._tools)
+
+    def register(self, name: str, handler: Any) -> None:
+        if not isinstance(name, str) or not name:
+            raise ToolError("Plugin tool name must be a non-empty string")
+        if name in _RESERVED_TOOL_NAMES:
+            raise ToolError(f"Plugin tool '{name}' conflicts with a built-in tool")
+        if not callable(handler):
+            raise ToolError(f"Plugin tool '{name}' must be callable")
+        self._tools[name] = handler
+
+
+def _load_plugin_module(path: Path) -> Any:
+    import importlib.util
+
+    module_name = f"middleware_runtime_plugin_{abs(hash(path))}"
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    if spec is None or spec.loader is None:
+        raise ToolError(f"Unable to load plugin module: {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_plugin_tools(root: Path, plugin_paths: list[str] | None) -> dict[str, Any]:
+    """Load plugin tools from Python files under the sandbox root."""
+
+    registry = RuntimePluginRegistry()
+    for raw_path in plugin_paths or []:
+        plugin_path = resolve_and_sandbox_path(root, raw_path)
+        if not plugin_path.exists() or not plugin_path.is_file():
+            raise ToolError(f"Plugin not found: {raw_path}")
+        if plugin_path.suffix != ".py":
+            raise ToolError(f"Plugin must be a Python file: {raw_path}")
+
+        module = _load_plugin_module(plugin_path)
+        if hasattr(module, "register"):
+            module.register(registry)
+        elif hasattr(module, "TOOLS"):
+            tools = getattr(module, "TOOLS")
+            if not isinstance(tools, dict):
+                raise ToolError(f"Plugin TOOLS must be a dict: {raw_path}")
+            for name, handler in tools.items():
+                registry.register(name, handler)
+        else:
+            raise ToolError(
+                f"Plugin {raw_path} must expose register(registry) or TOOLS"
+            )
+    return registry.tools
+
+
+def _find_skill_files(root: Path, skills_dir: str) -> list[Path]:
+    base = resolve_and_sandbox_path(root, skills_dir)
+    if not base.exists():
+        return []
+    if not base.is_dir():
+        raise ToolError(f"Skills path is not a directory: {skills_dir}")
+    files: list[Path] = []
+    for candidate in sorted(base.rglob("*")):
+        if candidate.is_file() and candidate.name.lower() in {"skill.md", "skill.txt"}:
+            files.append(candidate)
+    return files
+
+
+def _skill_name(root: Path, path: Path) -> str:
+    parent = path.parent.name.strip()
+    if parent:
+        return parent
+    return path.stem
+
+
+def _read_skill_doc(path: Path) -> str:
+    return path.read_text(encoding="utf-8", errors="replace")
+
+
+def tool_list_skills(root: Path, args: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    skills_dir = args.get("skills_dir", ".claude/skills")
+    if not isinstance(skills_dir, str):
+        raise ToolError("'skills_dir' must be a string")
+
+    skills = []
+    for path in _find_skill_files(root, skills_dir):
+        content = _read_skill_doc(path)
+        first_heading = ""
+        for line in content.splitlines():
+            if line.startswith("#"):
+                first_heading = line.lstrip("#").strip()
+                break
+        skills.append(
+            {
+                "name": _skill_name(root, path),
+                "path": _safe_rel(root, path),
+                "title": first_heading,
+            }
+        )
+    return {"skills": skills, "count": len(skills)}, {"skills_dir": skills_dir}
+
+
+def tool_skill(root: Path, args: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    name = args.get("name") or args.get("skill")
+    skills_dir = args.get("skills_dir", ".claude/skills")
+    if not isinstance(name, str) or not name:
+        raise ToolError("Missing 'name' argument")
+    if not isinstance(skills_dir, str):
+        raise ToolError("'skills_dir' must be a string")
+
+    requested = name.strip().lower()
+    for path in _find_skill_files(root, skills_dir):
+        skill_name = _skill_name(root, path)
+        if skill_name.lower() == requested:
+            content = _read_skill_doc(path)
+            return (
+                {
+                    "name": skill_name,
+                    "path": _safe_rel(root, path),
+                    "content": content,
+                },
+                {"skills_dir": skills_dir, "path": _safe_rel(root, path)},
+            )
+    raise ToolError(f"Skill not found: {name}")
+
+
 TOOLS = {
     "glob": tool_glob,
     "list": tool_list,
@@ -263,7 +399,12 @@ TOOLS = {
     "edit": tool_edit,
     "bash": tool_bash,
     "run": tool_bash,
+    "skill": tool_skill,
+    "list_skills": tool_list_skills,
 }
+
+
+_RESERVED_TOOL_NAMES = frozenset(TOOLS)
 
 
 class RuntimeBridge:
@@ -273,10 +414,23 @@ class RuntimeBridge:
     # `allow_bash = settings.tool_emulation_execution_enabled and not settings.tool_emulation_execution_sandbox`.
     _SHELL_TOOLS = frozenset({"bash", "run"})
 
-    def __init__(self, root_dir: str, allow_bash: bool = False):
+    def __init__(
+        self,
+        root_dir: str,
+        allow_bash: bool = False,
+        plugin_paths: list[str] | None = None,
+        extra_tools: dict[str, Any] | None = None,
+    ):
         self.root = Path(root_dir).resolve()
         self.allow_bash = allow_bash
         self.conversation_history: list[dict[str, Any]] = []
+        self.plugin_tools = load_plugin_tools(self.root, plugin_paths)
+        if extra_tools:
+            registry = RuntimePluginRegistry()
+            for tool_name, handler in extra_tools.items():
+                registry.register(tool_name, handler)
+            self.plugin_tools.update(registry.tools)
+        self.tools = {**TOOLS, **self.plugin_tools}
 
     def process_assistant_message(self, message: str) -> list[dict[str, Any]] | None:
         self.conversation_history.append({"role": "assistant", "content": message})
@@ -334,7 +488,7 @@ class RuntimeBridge:
                 name=name,
                 arguments=arguments,
             )
-        tool = TOOLS.get(name)
+        tool = self.tools.get(name)
         if tool is None:
             return self._error(
                 "unknown_tool",
