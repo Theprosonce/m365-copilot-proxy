@@ -281,7 +281,7 @@ By default (`M365_PERSIST_DEFAULT=true`), the proxy maps **each client chat to o
 How the mapping key is chosen, in order of precedence:
 
 1. `X-M365-Session-Id` header — an explicit, stable id you control (best when your client supports custom headers).
-2. `M365_Session` environment variable — a process-level stable id for clients that cannot set custom headers.
+2. `M365_Session` environment variable — a process-level stable id for clients that cannot set custom headers; when set, temporary chat is disabled so the session can use Copilot history/memory.
 3. `m365-...:persist` **plus** the OpenAI `user` field — one shared session per user.
 4. Otherwise — an automatic per-chat fingerprint (project + first real user message), so distinct chats get distinct conversations.
 
@@ -458,8 +458,8 @@ Most users only need `.env` after the proxy captures a token.
 | `M365_MODEL_ALIAS` | `m365-copilot` | Model name returned as the alias by `/v1/models`. |
 | `M365_WORK_GROUNDING` | `true` | `true` = Work grounding (enterprise data); `false` = Web only. Coding agents usually want `false`. |
 | `M365_PERSIST_DEFAULT` | `true` | Auto-map each client chat to one Copilot conversation. |
-| `M365_DISABLE_MEMORY` | `true` | Open every conversation as a temporary chat (`disableMemory=1`): no history, no memories. |
-| `M365_Session` | empty | Process-level persistent session id used when `X-M365-Session-Id` is not supplied. |
+| `M365_DISABLE_MEMORY` | `true` | Open every conversation as a temporary chat (`disableMemory=1`): no history, no memories. Ignored when `M365_Session` is set, because fixed sessions require memory/history. |
+| `M365_Session` | empty | Process-level persistent session id used when `X-M365-Session-Id` is not supplied; also disables temporary chat so memory/history can attach to that session. |
 | `M365_SESSION_DB` | `~/.m365-copilot-openai-proxy/sessions.db` | SQLite file for the conversation store. |
 | `M365_SESSION_SALT` | random per process | Salt for the auto conversation fingerprint. Set it to keep keys stable across restarts. |
 | `M365_RECV_TIMEOUT` | `90` | Seconds to wait for a substrate frame before giving up. |

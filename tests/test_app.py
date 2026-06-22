@@ -439,6 +439,18 @@ def test_openai_persistent_session_header_reuses_session() -> None:
     assert fake.sessions[0] is not None
 
 
+def test_m365_session_env_disables_temporary_memory(monkeypatch) -> None:
+    from m365_copilot_openai_proxy.app import _effective_disable_memory
+
+    settings = types.SimpleNamespace(disable_memory=True)
+
+    monkeypatch.delenv("M365_Session", raising=False)
+    assert _effective_disable_memory(settings) is True
+
+    monkeypatch.setenv("M365_Session", "work")
+    assert _effective_disable_memory(settings) is False
+
+
 def test_openai_persistent_session_env_reuses_session(monkeypatch) -> None:
     fake = FakeCopilotClient()
     client = build_client(fake)

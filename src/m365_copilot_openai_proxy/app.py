@@ -59,6 +59,18 @@ _SESSION_ID_HEADER = "x-m365-session-id"
 _SESSION_ID_ENV = "M365_Session"
 
 
+def _session_id_env_value() -> str:
+    return (os.environ.get(_SESSION_ID_ENV) or "").strip()
+
+
+def _effective_disable_memory(settings: Settings) -> bool:
+    # A fixed external session is meant to reuse the same Copilot conversation with memory/history.
+    # Temporary chat (`disableMemory=1`) would prevent that, so turn it off when M365_Session is set.
+    if _session_id_env_value():
+        return False
+    return settings.disable_memory
+
+
 def _is_proxy_model(settings: Settings, model: str | None) -> bool:
     """True if the model is one of ours (route to substrate); False -> passthrough candidate."""
     base = (model or "").split(":", 1)[0].strip().lower()
@@ -112,7 +124,7 @@ def create_app(
             resolved_settings.work_grounding,
             resolved_settings.recv_timeout,
             resolved_settings.open_timeout,
-            resolved_settings.disable_memory,
+            _effective_disable_memory(resolved_settings),
         )
     )
 
@@ -655,7 +667,7 @@ def _persistent_session(
     messages: list | None = None,
 ) -> PersistentSession | None:
     header_key = (raw_request.headers.get(_SESSION_ID_HEADER) or "").strip()
-    env_key = (os.environ.get(_SESSION_ID_ENV) or "").strip()
+    env_key = _session_id_env_value()
     if header_key:
         # Explicit client-supplied session id wins.
         key = f"header:{header_key}"
