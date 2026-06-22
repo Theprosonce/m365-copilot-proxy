@@ -297,13 +297,20 @@ def translate_anthropic_request(
             last_user_text = "\n".join(user_text_parts)
 
     last = request.messages[-1] if request.messages else None
-    if last is not None and last.role == "user" and last_user_text:
-        prompt = last_user_text
+    last_user_text_current_turn = (
+        flatten_content(last.content).strip()
+        if last is not None and last.role == "user"
+        else ""
+    )
+    if last is not None and last.role == "user" and last_user_text_current_turn:
+        prompt = last_user_text_current_turn
         for i in range(len(transcript_lines) - 1, -1, -1):
-            if transcript_lines[i] == f"User: {last_user_text}":
+            if transcript_lines[i] == f"User: {last_user_text_current_turn}":
                 del transcript_lines[i]
                 break
     else:
+        # Anthropic tool_result blocks are user-role messages without text. Treat
+        # those as agentic continuations, not as a repeat of an earlier user prompt.
         prompt = (
             "Continue the task using the conversation and tool results above. "
             "Either call the next tool(s) using the block format, or give your final answer."

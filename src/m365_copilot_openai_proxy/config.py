@@ -79,8 +79,11 @@ class Settings(BaseSettings):
     tool_emulation_exclude_tools: str = Field(
         default="", alias="M365_TOOL_EMULATION_EXCLUDE_TOOLS"
     )
+    # True lets Anthropic-compatible clients that send Claude model names
+    # still use the proxy's prompt-based tool emulation when native
+    # capability is unknown.
     tool_emulation_emulate_when_capability_unknown: bool = Field(
-        default=False, alias="M365_TOOL_EMULATION_UNKNOWN"
+        default=True, alias="M365_TOOL_EMULATION_UNKNOWN"
     )
     tool_emulation_native_passthrough: bool = Field(
         default=True, alias="M365_TOOL_EMULATION_NATIVE_PASSTHROUGH"

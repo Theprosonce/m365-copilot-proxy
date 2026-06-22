@@ -316,3 +316,49 @@ def test_translator_anthropic_separates_tool_results() -> None:
     assert "Tool result [toolu_123]" in tool_results_block, (
         "Tool use ID must be referenced"
     )
+
+
+
+def test_anthropic_tool_result_only_user_message_not_injected() -> None:
+    from middleware.tool_emulation import _apply_message_injection
+    from m365_copilot_openai_proxy.models import AnthropicMessage, ContentPart
+
+    msg = AnthropicMessage(
+        role="user",
+        content=[
+            ContentPart(
+                type="tool_result",
+                tool_use_id="toolu_123",
+                content="<content>Hello from tool</content>",
+            )
+        ],
+    )
+
+    _apply_message_injection([msg])
+
+    assert len(msg.content) == 1
+    assert msg.content[0].type == "tool_result"
+
+
+def test_claude_model_with_anthropic_tools_uses_emulation_by_default() -> None:
+    from middleware.pipeline import ToolMiddlewarePipeline
+    from m365_copilot_openai_proxy.models import AnthropicMessagesRequest, AnthropicMessage
+
+    pipeline = ToolMiddlewarePipeline(Settings(M365_ACCESS_TOKEN="fake"))
+    request = AnthropicMessagesRequest(
+        model="claude-sonnet-4-6",
+        messages=[AnthropicMessage(role="user", content="read package.json")],
+        tools=[
+            {
+                "name": "read",
+                "description": "Read a file",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"filePath": {"type": "string"}},
+                    "required": ["filePath"],
+                },
+            }
+        ],
+    )
+
+    assert pipeline.is_anthropic_active(request) is True

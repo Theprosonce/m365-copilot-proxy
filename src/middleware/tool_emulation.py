@@ -35,6 +35,33 @@ if not _INJECTION_CONTENT.strip():
     logger.warning(f"Injection file at {_injection_file_path.absolute()} exists but is empty.")
 
 
+def _part_type(part: Any) -> str | None:
+    if hasattr(part, "type"):
+        return getattr(part, "type", None)
+    if isinstance(part, dict):
+        return part.get("type")
+    return None
+
+
+def _part_text(part: Any) -> str:
+    if hasattr(part, "text"):
+        return getattr(part, "text", None) or ""
+    if isinstance(part, dict):
+        return part.get("text") or ""
+    return ""
+
+
+def _has_tool_result_part(content: list[Any]) -> bool:
+    return any(_part_type(part) == "tool_result" for part in content)
+
+
+def _has_nonempty_text_part(content: list[Any]) -> bool:
+    return any(
+        _part_type(part) == "text" and bool(_part_text(part).strip())
+        for part in content
+    )
+
+
 def _apply_message_injection(messages: list[Any]) -> None:
     if not _INJECTION_CONTENT.strip():
         return
@@ -50,12 +77,17 @@ def _apply_message_injection(messages: list[Any]) -> None:
                 )
                 msg.content = f"{_INJECTION_CONTENT}\n---\n{msg.content}"
             elif isinstance(msg.content, list):
+                # Anthropic tool results are represented as role=user messages with
+                # tool_result content blocks. Injecting the tool protocol into those
+                # continuation turns creates fake user text and can erase the real
+                # agentic continuation prompt after app.py strips the injected prefix.
+                if _has_tool_result_part(msg.content) and not _has_nonempty_text_part(msg.content):
+                    logger.debug("Skip injection for Anthropic tool_result-only user message.")
+                    continue
+
                 text_part = None
                 for part in msg.content:
-                    if hasattr(part, "type") and part.type == "text":
-                        text_part = part
-                        break
-                    elif isinstance(part, dict) and part.get("type") == "text":
+                    if _part_type(part) == "text":
                         text_part = part
                         break
 
