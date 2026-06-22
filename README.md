@@ -281,8 +281,9 @@ By default (`M365_PERSIST_DEFAULT=true`), the proxy maps **each client chat to o
 How the mapping key is chosen, in order of precedence:
 
 1. `X-M365-Session-Id` header — an explicit, stable id you control (best when your client supports custom headers).
-2. `m365-...:persist` **plus** the OpenAI `user` field — one shared session per user.
-3. Otherwise — an automatic per-chat fingerprint (project + first real user message), so distinct chats get distinct conversations.
+2. `M365_Session` environment variable — a process-level stable id for clients that cannot set custom headers.
+3. `m365-...:persist` **plus** the OpenAI `user` field — one shared session per user.
+4. Otherwise — an automatic per-chat fingerprint (project + first real user message), so distinct chats get distinct conversations.
 
 ```http
 X-M365-Session-Id: my-work-session
@@ -381,7 +382,7 @@ Send images the normal OpenAI way — an `image_url` content part with a `data:`
 
 ### Session management
 
-Each client chat maps to one Copilot conversation. The mapping key is, in order of precedence: the `X-M365-Session-Id` header, then `:persist` + the OpenAI `user` field, then an automatic per-chat fingerprint. Mappings are persisted in SQLite so chats survive a proxy restart, and can be listed / relabelled / rotated / deleted via the `/v1/chats` endpoints above.
+Each client chat maps to one Copilot conversation. The mapping key is, in order of precedence: the `X-M365-Session-Id` header, then the `M365_Session` environment variable, then `:persist` + the OpenAI `user` field, then an automatic per-chat fingerprint. Mappings are persisted in SQLite so chats survive a proxy restart, and can be listed / relabelled / rotated / deleted via the `/v1/chats` endpoints above.
 
 ## More Examples
 
@@ -458,6 +459,7 @@ Most users only need `.env` after the proxy captures a token.
 | `M365_WORK_GROUNDING` | `true` | `true` = Work grounding (enterprise data); `false` = Web only. Coding agents usually want `false`. |
 | `M365_PERSIST_DEFAULT` | `true` | Auto-map each client chat to one Copilot conversation. |
 | `M365_DISABLE_MEMORY` | `true` | Open every conversation as a temporary chat (`disableMemory=1`): no history, no memories. |
+| `M365_Session` | empty | Process-level persistent session id used when `X-M365-Session-Id` is not supplied. |
 | `M365_SESSION_DB` | `~/.m365-copilot-openai-proxy/sessions.db` | SQLite file for the conversation store. |
 | `M365_SESSION_SALT` | random per process | Salt for the auto conversation fingerprint. Set it to keep keys stable across restarts. |
 | `M365_RECV_TIMEOUT` | `90` | Seconds to wait for a substrate frame before giving up. |

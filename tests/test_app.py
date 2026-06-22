@@ -439,6 +439,46 @@ def test_openai_persistent_session_header_reuses_session() -> None:
     assert fake.sessions[0] is not None
 
 
+def test_openai_persistent_session_env_reuses_session(monkeypatch) -> None:
+    fake = FakeCopilotClient()
+    client = build_client(fake)
+    body = {
+        "model": "m365-copilot",
+        "messages": [{"role": "user", "content": "Hello"}],
+    }
+
+    monkeypatch.setenv("M365_Session", "work")
+    first = client.post("/v1/chat/completions", json=body)
+    second = client.post("/v1/chat/completions", json=body)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert fake.sessions[0] is fake.sessions[1]
+    assert fake.sessions[0] is not None
+
+
+def test_openai_persistent_session_header_overrides_env(monkeypatch) -> None:
+    fake = FakeCopilotClient()
+    client = build_client(fake)
+    body = {
+        "model": "m365-copilot",
+        "messages": [{"role": "user", "content": "Hello"}],
+    }
+
+    monkeypatch.setenv("M365_Session", "env-work")
+    first = client.post(
+        "/v1/chat/completions", headers={"X-M365-Session-Id": "header-work"}, json=body
+    )
+    second = client.post(
+        "/v1/chat/completions", headers={"X-M365-Session-Id": "header-work"}, json=body
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert fake.sessions[0] is fake.sessions[1]
+    assert fake.sessions[0] is not None
+
+
 def test_openai_persistent_model_suffix_uses_user_as_session_key() -> None:
     fake = FakeCopilotClient()
     client = build_client(fake)

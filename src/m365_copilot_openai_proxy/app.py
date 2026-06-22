@@ -56,6 +56,7 @@ def _debug_dump(label: str, content: str) -> None:
 
 _PERSIST_MODEL_SUFFIX = ":persist"
 _SESSION_ID_HEADER = "x-m365-session-id"
+_SESSION_ID_ENV = "M365_Session"
 
 
 def _is_proxy_model(settings: Settings, model: str | None) -> bool:
@@ -654,9 +655,13 @@ def _persistent_session(
     messages: list | None = None,
 ) -> PersistentSession | None:
     header_key = (raw_request.headers.get(_SESSION_ID_HEADER) or "").strip()
+    env_key = (os.environ.get(_SESSION_ID_ENV) or "").strip()
     if header_key:
         # Explicit client-supplied session id wins.
         key = f"header:{header_key}"
+    elif env_key:
+        # Process-level session id for clients that cannot set custom headers.
+        key = f"env:{env_key}"
     elif model.endswith(_PERSIST_MODEL_SUFFIX) and fallback_key:
         # `:persist` WITH an explicit user id -> one stable shared session for that user.
         key = f"model:{fallback_key}"
