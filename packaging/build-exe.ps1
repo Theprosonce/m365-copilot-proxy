@@ -2,9 +2,10 @@
 # Corporate Application Control (WDAC) blocks UNSIGNED executables; an Authenticode
 # signature (even self-signed by you) is enough for it to run on this machine.
 #
-# Usage:  powershell -ExecutionPolicy Bypass -File .\build-exe.ps1
+# Usage:  powershell -ExecutionPolicy Bypass -File .\packaging\build-exe.ps1
 $ErrorActionPreference = "Stop"
-$root = Split-Path -Parent $MyInvocation.MyCommand.Path
+$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$root = Resolve-Path (Join-Path $scriptDir "..")
 Set-Location $root
 $exe = Join-Path $root "dist\m365-copilot-proxy.exe"
 
@@ -28,7 +29,7 @@ Remove-Item -Recurse -Force "$root\build", "$root\dist", "$root\m365-copilot-pro
     --collect-all uvicorn `
     --collect-all customtkinter `
     --collect-all pystray `
-    build_entry.py
+    packaging\build_entry.py
 if (-not (Test-Path $exe)) { throw "build failed: $exe not found" }
 
 Write-Host "[2/3] Code signing..." -ForegroundColor Cyan

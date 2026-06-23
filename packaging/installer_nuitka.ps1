@@ -1,11 +1,12 @@
 # EXPERIMENT: Nuitka --standalone (compiled C, in-process -> clears WDAC) wrapped in an Inno Setup
-# per-user installer. Separate from build-exe.ps1 (PyInstaller onefile) and build-exe-nuitka.ps1
+# per-user installer. Separate from packaging/build-exe.ps1 (PyInstaller onefile) and build-exe-nuitka.ps1
 # (onefile, WDAC dead-end) -- those are left untouched.
 #
-# Flow:  Nuitka --standalone  ->  sign main exe  ->  ISCC installer.iss  ->  sign Setup.exe
-# Usage: powershell -ExecutionPolicy Bypass -File .\installer_nuitka.ps1
+# Flow:  Nuitka --standalone  ->  sign main exe  ->  ISCC packaging\installer.iss  ->  sign Setup.exe
+# Usage: powershell -ExecutionPolicy Bypass -File .\packaging\installer_nuitka.ps1
 $ErrorActionPreference = "Stop"
-$root = Split-Path -Parent $MyInvocation.MyCommand.Path
+$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$root = Resolve-Path (Join-Path $scriptDir "..")
 Set-Location $root
 
 # Single source of truth: read the version from the package (__version__).
@@ -48,7 +49,7 @@ Write-Host "[1/4] Nuitka --standalone compile (slow: minutes)..." -ForegroundCol
     --output-filename="m365-copilot-proxy.exe" `
     --assume-yes-for-downloads `
     --remove-output `
-    build_entry.py
+    packaging\build_entry.py
 if (-not (Test-Path $exe)) { throw "Nuitka standalone build failed: $exe not found" }
 
 Write-Host "[2/4] Signing the standalone main exe..." -ForegroundColor Cyan
@@ -63,7 +64,7 @@ Write-Host "  signed main exe: $($sig.Status)"
 
 Write-Host "[3/4] Building installer with Inno Setup..." -ForegroundColor Cyan
 New-Item -ItemType Directory -Force -Path $instOut | Out-Null
-& "$iscc" "/DAppVersion=$version" "/DPayloadDir=$distDir" "installer.iss"
+& "$iscc" "/DAppVersion=$version" "/DPayloadDir=$distDir" "packaging\installer.iss"
 if (-not (Test-Path $setup)) { throw "Inno build failed: $setup not found" }
 
 Write-Host "[4/4] Signing the installer..." -ForegroundColor Cyan

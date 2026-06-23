@@ -1,17 +1,17 @@
 ; Inno Setup script for M365 Copilot Proxy.
 ; Per-user install (no admin): drops the Nuitka --standalone .dist folder into
 ; %LOCALAPPDATA%\Programs and wires a Start Menu shortcut + optional run-at-login.
-; Built by installer_nuitka.ps1 (which compiles the payload, signs it, then runs ISCC).
+; Built by packaging\installer_nuitka.ps1 (which compiles the payload, signs it, then runs ISCC).
 
 #define AppName "M365 Copilot Proxy"
-; AppVersion is passed by installer_nuitka.ps1 via /DAppVersion=<pkg __version__>; default for manual runs.
+; AppVersion is passed by packaging\installer_nuitka.ps1 via /DAppVersion=<pkg __version__>; default for manual runs.
 #ifndef AppVersion
   #define AppVersion "0.0.0"
 #endif
 #define AppExe "m365-copilot-proxy.exe"
 #define AppPublisher "MassimilianoPili"
 #ifndef PayloadDir
-  #define PayloadDir "dist-nuitka\build_entry.dist"
+  #define PayloadDir "..\dist-nuitka\build_entry.dist"
 #endif
 
 [Setup]
@@ -30,8 +30,8 @@ CloseApplications=yes
 RestartApplications=no
 Compression=lzma2/max
 SolidCompression=yes
-SetupIconFile=assets\icon.ico
-OutputDir=dist-installer
+SetupIconFile=..\assets\icon.ico
+OutputDir=..\dist-installer
 OutputBaseFilename=M365CopilotProxy-Setup-{#AppVersion}
 WizardStyle=modern
 

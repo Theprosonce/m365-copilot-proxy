@@ -5,7 +5,7 @@
 #   .\proxy.ps1 -ForceBuild   # rebuild dist\m365-copilot-proxy.exe even if it exists, then start
 #
 # What it does (when NOT running):
-#   1. ensure .venv exists (needed by PyInstaller in build-exe.ps1)
+#   1. ensure .venv exists (needed by PyInstaller in packaging\build-exe.ps1)
 #   2. ensure dist\m365-copilot-proxy.exe exists (locally built -> no Mark-of-the-Web ->
 #      no SmartScreen warning, unlike the binary downloaded from GitHub releases)
 #   3. start that exe headless (`serve`) - windowless, listening on :8000
@@ -49,7 +49,7 @@ if ($active) {
 # --- 3. not running -> ENSURE + START ----------------------------------------
 Write-Host "[M365 Proxy] not running - preparing to start..." -ForegroundColor Cyan
 
-# 3a. ensure venv (build-exe.ps1 invokes .venv\Scripts\python.exe -m PyInstaller)
+# 3a. ensure venv (packaging\build-exe.ps1 invokes .venv\Scripts\python.exe -m PyInstaller)
 if (-not (Test-Path .venv)) {
     Write-Host "  .venv missing - creating + installing project (editable)..." -ForegroundColor Cyan
     python -m venv .venv
@@ -66,7 +66,7 @@ if ((-not (Test-Path $exe)) -or $ForceBuild) {
     } else {
         Write-Host "  $exeRel missing - building (PyInstaller, ~1-2 min)..." -ForegroundColor Cyan
     }
-    & ".\build-exe.ps1"
+    & ".\packaging\build-exe.ps1"
     if (-not (Test-Path $exe)) { throw "build failed: $exeRel not found" }
 }
 
