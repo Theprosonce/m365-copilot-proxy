@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from m365_copilot_openai_proxy.config import Settings
 from m365_copilot_openai_proxy.models import AnthropicMessagesRequest, OpenAIChatRequest, OpenAIMessage
@@ -76,6 +77,102 @@ def test_anthropic_tools_round_trip_preserves_tool_use_shape() -> None:
         "name": "read_file",
         "input": {"path": "a.txt"},
     }
+
+
+def test_openai_compatible_accepts_anthropic_shaped_tool_schema() -> None:
+    tools = [
+        {
+            "name": "Read",
+            "description": "Read file contents",
+            "input_schema": {
+                "type": "object",
+                "properties": {"file_path": {"type": "string"}},
+                "required": ["file_path"],
+            },
+        }
+    ]
+
+    standard = openai_tools_to_standard(tools)
+
+    assert len(standard) == 1
+    assert standard[0].function.name == "Read"
+    assert standard[0].function.parameters["properties"]["file_path"]["type"] == "string"
+
+
+def test_prompt_renders_mixed_openai_and_anthropic_compatible_tools() -> None:
+    pipeline = ToolMiddlewarePipeline(Settings(M365_ACCESS_TOKEN="fake"))
+    request = OpenAIChatRequest(
+        model="m365-opus",
+        messages=[OpenAIMessage(role="user", content="inspect files")],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "Glob",
+                    "description": "Find files",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"pattern": {"type": "string"}},
+                        "required": ["pattern"],
+                    },
+                },
+            },
+            {
+                "name": "Read",
+                "description": "Read file contents",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"file_path": {"type": "string"}},
+                    "required": ["file_path"],
+                },
+            },
+        ],
+    )
+
+    new_request, prompt, tools = pipeline.preflight_openai(request)
+
+    assert new_request.tools is None
+    assert [tool["name"] for tool in tools] == ["Glob", "Read"]
+    assert "Glob(pattern:string)" in (prompt or "")
+    assert "Read(file_path:string)" in (prompt or "")
+
+
+def test_prompt_forced_tool_only_lists_selected_tool() -> None:
+    pipeline = ToolMiddlewarePipeline(Settings(M365_ACCESS_TOKEN="fake"))
+    request = OpenAIChatRequest(
+        model="m365-opus",
+        messages=[OpenAIMessage(role="user", content="read file")],
+        tools=[
+            {
+                "name": "Read",
+                "description": "Read file contents",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"file_path": {"type": "string"}},
+                    "required": ["file_path"],
+                },
+            },
+            {
+                "name": "Write",
+                "description": "Write file contents",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"},
+                        "content": {"type": "string"},
+                    },
+                    "required": ["path", "content"],
+                },
+            },
+        ],
+        tool_choice={"type": "function", "function": {"name": "Read"}},
+    )
+
+    _new_request, prompt, tools = pipeline.preflight_openai(request)
+
+    assert [tool["name"] for tool in tools] == ["Read", "Write"]
+    assert "Read(file_path:string)" in (prompt or "")
+    assert "Write(path:string, content:string)" not in (prompt or "")
 
 
 def test_middleware_openai_tool_choice_none_preserves_no_prompt_injection() -> None:
@@ -461,3 +558,11 @@ def test_tool_emulation_injection_anthropic(tmp_path, monkeypatch) -> None:
         importlib.reload(middleware.tool_emulation)
         importlib.reload(middleware.pipeline)
 
+
+
+def test_default_injection_does_not_force_unlisted_glob_tool() -> None:
+    injection = Path("prompts/tool_emulation_injection.md").read_text(encoding="utf-8")
+
+    assert "On first execution always return" not in injection
+    assert '{"name": "glob", "arguments": {"pattern": "**/*"}}' not in injection
+    assert "Only invoke tools that are actually listed as callable" in injection

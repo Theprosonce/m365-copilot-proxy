@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+import logging
 import subprocess
 from pathlib import Path
 from typing import Any
 
 _BEGIN = "<<<TOOL_CALLS>>>"
 _END = "<<<END_TOOL_CALLS>>>"
+
+logger = logging.getLogger(__name__)
 
 
 class ToolError(Exception):
@@ -76,7 +79,7 @@ def tool_list(
 def tool_read(
     root: Path, args: dict[str, Any]
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    path = args.get("path")
+    path = args.get("path") or args.get("file_path") or args.get("filePath")
     if not isinstance(path, str) or not path:
         raise ToolError("Missing 'path' argument")
     target = resolve_and_sandbox_path(root, path)
@@ -254,6 +257,78 @@ def tool_bash(
     )
 
 
+def _text_arg(args: dict[str, Any], *names: str) -> str:
+    for name in names:
+        value = args.get(name)
+        if isinstance(value, str) and value:
+            return value
+    raise ToolError(f"Missing text argument: one of {', '.join(names)}")
+
+
+def tool_ai_summarize(
+    root: Path, args: dict[str, Any]
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    text = _text_arg(args, "text", "content", "input")
+    max_sentences = args.get("max_sentences", 3)
+    if not isinstance(max_sentences, int) or max_sentences <= 0:
+        raise ToolError("'max_sentences' must be a positive integer")
+    sentences = [part.strip() for part in text.replace("\n", " ").split(".") if part.strip()]
+    summary = ". ".join(sentences[:max_sentences])
+    if summary:
+        summary += "."
+    return {"summary": summary}, {"tool_type": "ai_text", "sentences": min(len(sentences), max_sentences)}
+
+
+def tool_ai_extract_keywords(
+    root: Path, args: dict[str, Any]
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    text = _text_arg(args, "text", "content", "input")
+    limit = args.get("limit", 10)
+    if not isinstance(limit, int) or limit <= 0:
+        raise ToolError("'limit' must be a positive integer")
+    stop = {"the", "and", "for", "with", "that", "this", "from", "are", "was", "were", "you", "your", "have", "has"}
+    counts: dict[str, int] = {}
+    for raw in text.lower().split():
+        word = "".join(ch for ch in raw if ch.isalnum())
+        if len(word) < 3 or word in stop:
+            continue
+        counts[word] = counts.get(word, 0) + 1
+    keywords = [word for word, _ in sorted(counts.items(), key=lambda item: (-item[1], item[0]))[:limit]]
+    return {"keywords": keywords}, {"tool_type": "ai_text", "limit": limit}
+
+
+def tool_ai_classify(
+    root: Path, args: dict[str, Any]
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    text = _text_arg(args, "text", "content", "input").lower()
+    labels = args.get("labels")
+    if labels is not None and (not isinstance(labels, list) or not all(isinstance(x, str) for x in labels)):
+        raise ToolError("'labels' must be a list of strings")
+    if labels:
+        scored = [(label, text.count(label.lower())) for label in labels]
+        label = max(scored, key=lambda item: item[1])[0]
+    elif any(word in text for word in ("error", "failed", "bug", "broken")):
+        label = "issue"
+    elif any(word in text for word in ("todo", "task", "action", "next")):
+        label = "task"
+    else:
+        label = "general"
+    return {"label": label}, {"tool_type": "ai_text"}
+
+
+def tool_ai_rewrite(
+    root: Path, args: dict[str, Any]
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    text = _text_arg(args, "text", "content", "input")
+    style = args.get("style", "concise")
+    if not isinstance(style, str):
+        raise ToolError("'style' must be a string")
+    rewritten = " ".join(text.split())
+    if style == "bullet":
+        rewritten = "\n".join(f"- {line.strip()}" for line in rewritten.split(". ") if line.strip())
+    return {"text": rewritten, "style": style}, {"tool_type": "ai_text"}
+
+
 class RuntimePluginRegistry:
     """Registry for runtime bridge tools supplied by plugins and skills.
 
@@ -392,17 +467,28 @@ def tool_skill(root: Path, args: dict[str, Any]) -> tuple[dict[str, Any], dict[s
 
 TOOLS = {
     "glob": tool_glob,
+    "Glob": tool_glob,
     "list": tool_list,
+    "List": tool_list,
     "read": tool_read,
+    "Read": tool_read,
     "search": tool_search,
+    "Search": tool_search,
     "write": tool_write,
+    "Write": tool_write,
     "edit": tool_edit,
+    "Edit": tool_edit,
     "bash": tool_bash,
+    "Bash": tool_bash,
     "run": tool_bash,
+    "Run": tool_bash,
+    "ai_summarize": tool_ai_summarize,
+    "ai_extract_keywords": tool_ai_extract_keywords,
+    "ai_classify": tool_ai_classify,
+    "ai_rewrite": tool_ai_rewrite,
     "skill": tool_skill,
     "list_skills": tool_list_skills,
 }
-
 
 _RESERVED_TOOL_NAMES = frozenset(TOOLS)
 
@@ -498,6 +584,7 @@ class RuntimeBridge:
             )
 
         try:
+            logger.info("RuntimeBridge using tool: %s", name)
             output, meta = tool(self.root, arguments)
             return {
                 "name": name,

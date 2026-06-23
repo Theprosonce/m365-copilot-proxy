@@ -855,6 +855,24 @@ def test_anthropic_messages_endpoint() -> None:
     assert body["content"][0]["text"] == "copilot reply"
 
 
+def test_anthropic_messages_does_not_log_all_offered_tools(capsys) -> None:
+    fake = FakeCopilotClient()
+    client = build_client(fake)
+    response = client.post(
+        "/v1/messages",
+        json={
+            "model": "ignored",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "tools": [{"name": "bash", "description": "Run shell commands"}],
+        },
+    )
+
+    assert response.status_code == 200
+    out = capsys.readouterr().out
+    assert "-> /v1/messages model=" in out
+    assert "-> tool=bash" not in out
+
+
 def test_anthropic_streaming_returns_error_event_on_upstream_failure() -> None:
     client = build_client(FailingStreamCopilotClient())
     with client.stream(

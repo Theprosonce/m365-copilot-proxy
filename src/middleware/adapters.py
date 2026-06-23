@@ -16,30 +16,51 @@ from .models import (
 def _function_from_any(tool: dict[str, Any]) -> dict[str, Any] | None:
     if tool.get("type") == "function" and isinstance(tool.get("function"), dict):
         return tool["function"]
+    if "function" in tool and isinstance(tool.get("function"), dict):
+        return tool["function"]
     if "name" in tool:
         return tool
     return None
 
 
+def _schema_from_any(fn: dict[str, Any]) -> dict[str, Any]:
+    """Return a JSON-schema parameter object from OpenAI or Anthropic-like tools."""
+
+    schema = fn.get("parameters")
+    if schema is None:
+        schema = fn.get("input_schema")
+    if not isinstance(schema, dict):
+        return {}
+    return dict(schema)
+
+
 def openai_tools_to_standard(tools: list[dict[str, Any]] | None) -> list[StandardToolDefinition]:
-    """Normalize OpenAI chat/completions tool definitions."""
+    """Normalize OpenAI-compatible tool definitions.
+
+    Accept both canonical OpenAI ``type=function`` / ``function.parameters``
+    tools and Anthropic-like direct ``name`` / ``input_schema`` tools because
+    OpenAI-compatible clients may proxy Claude Code built-ins using either
+    shape.
+    """
 
     normalized: list[StandardToolDefinition] = []
     for tool in tools or []:
         fn = _function_from_any(tool)
         if not fn:
             continue
+        name = str(fn.get("name", ""))
+        if not name:
+            continue
         normalized.append(
             StandardToolDefinition(
                 function=StandardToolFunction(
-                    name=str(fn.get("name", "")),
+                    name=name,
                     description=str(fn.get("description") or ""),
-                    parameters=dict(fn.get("parameters") or {}),
+                    parameters=_schema_from_any(fn),
                 )
             )
         )
     return normalized
-
 
 def openai_functions_to_standard(functions: list[dict[str, Any]] | None) -> list[StandardToolDefinition]:
     """Normalize legacy OpenAI `functions` definitions."""
@@ -55,7 +76,7 @@ def anthropic_tools_to_standard(tools: list[dict[str, Any]] | None) -> list[Stan
         name = str(tool.get("name", ""))
         if not name:
             continue
-        parameters = tool.get("input_schema") or tool.get("parameters") or {}
+        parameters = _schema_from_any(tool)
         normalized.append(
             StandardToolDefinition(
                 function=StandardToolFunction(

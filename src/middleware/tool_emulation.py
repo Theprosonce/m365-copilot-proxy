@@ -215,16 +215,38 @@ class ToolEmulationPipeline:
 
     def _normalize_tools(self, request: OpenAIChatRequest) -> list[dict[str, Any]]:
         tools = []
+
+        def normalize_function(fn: dict[str, Any]) -> dict[str, Any] | None:
+            name = fn.get("name")
+            if not name:
+                return None
+            normalized = dict(fn)
+            if "parameters" not in normalized and isinstance(normalized.get("input_schema"), dict):
+                # Anthropic-compatible clients use input_schema. The prompt renderer
+                # and parser validate against OpenAI-style parameters internally, so
+                # normalize at the edge while preserving the callable tool name.
+                normalized["parameters"] = dict(normalized["input_schema"])
+            return normalized
+
         if request.tools:
             for t in request.tools:
-                if t.get("type") == "function" and "function" in t:
-                    tools.append(t["function"])
+                fn = None
+                if t.get("type") == "function" and isinstance(t.get("function"), dict):
+                    fn = t["function"]
+                elif isinstance(t.get("function"), dict):
+                    fn = t["function"]
                 elif "name" in t:
-                    # Anthropic shape fallback or direct function dict
-                    tools.append(t)
+                    # Anthropic shape fallback or direct function dict.
+                    fn = t
+                if fn:
+                    normalized = normalize_function(fn)
+                    if normalized:
+                        tools.append(normalized)
         if request.functions:
             for f in request.functions:
-                tools.append(f)
+                normalized = normalize_function(f)
+                if normalized:
+                    tools.append(normalized)
         return tools
 
     def _reduce_tools(
@@ -333,15 +355,19 @@ class ToolEmulationPipeline:
         if not tools and tool_choice in (None, "auto"):
             return ""
 
+        forced_name = self._forced_tool_name(tool_choice)
+        displayed_tools = tools
+        if forced_name:
+            displayed_tools = [t for t in tools if t.get("name") == forced_name]
+
         lines = [
             _INJECTION_CONTENT,
             "",
             "# Callable functions",
         ]
-        for t in tools:
+        for t in displayed_tools:
             lines.append(f"- {self._tool_signature(t)}")
 
-        forced_name = self._forced_tool_name(tool_choice)
         if forced_name:
             lines += ["", message("tools.forced", name=forced_name)]
         elif tool_choice == "required":

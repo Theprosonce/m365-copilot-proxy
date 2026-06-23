@@ -449,6 +449,7 @@ def create_app(
             f"-> /v1/messages model={request.model!r} stream={getattr(request, 'stream', False)} "
             f"route={'substrate' if ours else 'passthrough'} passthrough_enabled={settings.anthropic_passthrough}"
         )
+        # Log the tool selected by the model later, not every tool merely offered by the client.
         if settings.anthropic_passthrough and not ours:
             from .anthropic_passthrough import credential_available, forward_messages
 
