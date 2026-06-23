@@ -56,7 +56,7 @@ def _debug_dump(label: str, content: str) -> None:
 
 _PERSIST_MODEL_SUFFIX = ":persist"
 _SESSION_ID_HEADER = "x-m365-session-id"
-_SESSION_ID_ENV = "M365_Session"
+_SESSION_ID_ENV = "M365_SESSION"
 
 
 def _session_id_env_value() -> str:
@@ -65,7 +65,7 @@ def _session_id_env_value() -> str:
 
 def _effective_disable_memory(settings: Settings) -> bool:
     # A fixed external session is meant to reuse the same Copilot conversation with memory/history.
-    # Temporary chat (`disableMemory=1`) would prevent that, so turn it off when M365_Session is set.
+    # Temporary chat (`disableMemory=1`) would prevent that, so turn it off when M365_SESSION is set.
     if _session_id_env_value():
         return False
     return settings.disable_memory
@@ -117,6 +117,11 @@ def create_app(
         max_sessions=resolved_settings.session_max,
         ttl_seconds=resolved_settings.session_ttl_seconds,
     )
+
+    @app.on_event("startup")
+    async def _print_session_attached_on_startup() -> None:
+        if session := _session_id_env_value():
+            print(f"X-M365-Session-Id: Session attached: {session}", flush=True)
     app.state.copilot_client_factory = copilot_client_factory or (
         lambda: SubstrateCopilotClient(
             app.state.token_store.get(),

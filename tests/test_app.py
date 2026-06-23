@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import types
 import base64
 import json
 import time
@@ -444,17 +445,27 @@ def test_m365_session_env_disables_temporary_memory(monkeypatch) -> None:
 
     settings = types.SimpleNamespace(disable_memory=True)
 
-    monkeypatch.delenv("M365_Session", raising=False)
+    monkeypatch.delenv("M365_SESSION", raising=False)
     assert _effective_disable_memory(settings) is True
 
-    monkeypatch.setenv("M365_Session", "work")
+    monkeypatch.setenv("M365_SESSION", "work")
     assert _effective_disable_memory(settings) is False
 
-    monkeypatch.delenv("M365_Session", raising=False)
+    monkeypatch.delenv("M365_SESSION", raising=False)
     assert _effective_disable_memory(settings) is True
 
     settings.disable_memory = False
     assert _effective_disable_memory(settings) is False
+
+
+def test_m365_session_env_prints_on_startup(monkeypatch, capsys) -> None:
+    fake = FakeCopilotClient()
+    monkeypatch.setenv("M365_SESSION", "work")
+
+    with build_client(fake):
+        pass
+
+    assert "X-M365-Session-Id: Session attached: work" in capsys.readouterr().out
 
 
 def test_openai_persistent_session_env_reuses_session(monkeypatch) -> None:
@@ -465,7 +476,7 @@ def test_openai_persistent_session_env_reuses_session(monkeypatch) -> None:
         "messages": [{"role": "user", "content": "Hello"}],
     }
 
-    monkeypatch.setenv("M365_Session", "work")
+    monkeypatch.setenv("M365_SESSION", "work")
     first = client.post("/v1/chat/completions", json=body)
     second = client.post("/v1/chat/completions", json=body)
 
@@ -473,6 +484,7 @@ def test_openai_persistent_session_env_reuses_session(monkeypatch) -> None:
     assert second.status_code == 200
     assert fake.sessions[0] is fake.sessions[1]
     assert fake.sessions[0] is not None
+    assert "X-M365-Session-Id: Session attached: work" not in fake.calls[0][1]
 
 
 def test_openai_persistent_session_header_overrides_env(monkeypatch) -> None:
@@ -483,7 +495,7 @@ def test_openai_persistent_session_header_overrides_env(monkeypatch) -> None:
         "messages": [{"role": "user", "content": "Hello"}],
     }
 
-    monkeypatch.setenv("M365_Session", "env-work")
+    monkeypatch.setenv("M365_SESSION", "env-work")
     first = client.post(
         "/v1/chat/completions", headers={"X-M365-Session-Id": "header-work"}, json=body
     )
@@ -495,6 +507,7 @@ def test_openai_persistent_session_header_overrides_env(monkeypatch) -> None:
     assert second.status_code == 200
     assert fake.sessions[0] is fake.sessions[1]
     assert fake.sessions[0] is not None
+    assert "X-M365-Session-Id: Session attached: env-work" not in fake.calls[0][1]
 
 
 def test_openai_persistent_model_suffix_uses_user_as_session_key() -> None:
@@ -568,7 +581,6 @@ def test_session_store_does_not_evict_a_leased_session() -> None:
 
 
 def test_persistent_session_rotates_on_truncated_history_edit() -> None:
-    import types
 
     from m365_copilot_openai_proxy.app import _persistent_session
 
