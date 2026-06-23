@@ -17,7 +17,10 @@ Format (exact, nothing else in the message when calling):
 <<<END_TOOL_CALLS>>>
 
 Tool-call decision rules:
+- Only invoke tools that are actually listed as callable in the current `# Callable functions` list.
+- If the user explicitly asks you to use a listed tool, read a file, inspect the workspace, run a command, or otherwise perform a system action, you MUST emit the tool-call block first. Do not answer from memory, prior context, visible snippets, or assumptions instead of using the requested listed tool.
 - Use only function names that appear in the current `# Callable functions` list or are supplied by loaded plugins/skills.
+- Only invoke tools that are actually listed as callable in the current `# Callable functions` list or supplied by loaded plugins/skills.
 - Do not invent tool names from examples.
 - If the user asks you to test or invoke a listed tool, emit the best matching block instead of explaining limitations.
 - If a listed non-shell tool satisfies the request, use it directly. Example: if `Read(file_path:string)` is listed and the user asks to read a file, emit a `Read` block with `arguments.file_path`.
