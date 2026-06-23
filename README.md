@@ -25,6 +25,22 @@ No Azure app registration. No admin consent. Sign in with your normal M365 Copil
 
 ## Quick Start
 
+One-command setup scripts install `uv` if needed, install dependencies, then start the proxy.
+
+```powershell
+# Windows
+powershell -ExecutionPolicy Bypass -File .\setup\setup.ps1 serve
+# or
+setup\setup.bat serve
+```
+
+```bash
+# Linux
+./setup/setup.sh serve
+```
+
+If you already have `uv` installed, the equivalent manual commands are:
+
 ```powershell
 uv sync
 uv run copilot-openai-proxy serve
@@ -76,6 +92,8 @@ the runtime is in place before the first start.
 
 | Script | OS | Purpose |
 |---|---|---|
+| `setup/setup.ps1` / `setup/setup.bat` | Windows | First-run quick start: install `uv` if missing, run `uv sync`, then start the proxy. |
+| `setup/setup.sh` | Linux | First-run quick start: install `uv` if missing, run `uv sync`, then start the proxy. |
 | `proxy.ps1` *(recommended on Windows)* | Windows | Toggle on/off; build the standalone exe if missing, then start it headless. `.\proxy.ps1` toggles, `.\proxy.ps1 -ForceBuild` rebuilds first. Locally built → no Mark-of-the-Web → no SmartScreen prompt. |
 | `proxy.sh` *(recommended on macOS / Linux)* | macOS / Linux | Toggle on/off; create the `.venv` + editable install on first start, then run headless from source in background. `./proxy.sh --reinstall` forces a fresh `pip install -e .`. |
 | `proxy-toggle.bat` | Windows | Simple toggle on/off of the venv console script. No build step — assumes `.venv` is already set up. |
