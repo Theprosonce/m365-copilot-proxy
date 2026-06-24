@@ -89,9 +89,9 @@ def _client(
     fake: FakeCopilotClient, tmp_db: Path, persist_default: bool = True
 ) -> TestClient:
     settings = Settings(
-        M365_ACCESS_TOKEN="fake",
-        M365_PERSIST_DEFAULT=persist_default,
-        M365_SESSION_DB=str(tmp_db),
+        access_token="fake",
+        persist_default=persist_default,
+        session_db_path=str(tmp_db),
     )
     return TestClient(
         create_app(settings=settings, copilot_client_factory=lambda: fake)

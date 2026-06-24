@@ -13,8 +13,8 @@ from m365_copilot_openai_proxy.config import Settings
 @pytest.fixture
 def settings() -> Settings:
     return Settings(
-        M365_ACCESS_TOKEN="fake",
-        M365_TOOL_EMULATION_ENABLED=True,
+        access_token="fake",
+        tool_emulation_enabled=True,
         M365_TOOL_EMULATION_NATIVE_PASSTHROUGH=True,
     )
 
@@ -99,7 +99,6 @@ def test_parse_ignores_invalid_json(settings: Settings) -> None:
 
 
 def test_tool_reducer_ranks_by_relevance(settings: Settings) -> None:
-    settings.tool_emulation_max_tools_in_prompt = 2
     pipeline = ToolEmulationPipeline(settings)
     tools = [
         {
@@ -132,11 +131,11 @@ def test_tool_reducer_ranks_by_relevance(settings: Settings) -> None:
     )
     new_req, prompt, norm_tools = pipeline.preflight(req)
 
-    # Check that 'relevant_tool' and 'another_relevant' are the only ones kept in the prompt
+    # Check that all tools are kept in the prompt, as we do not limit the model
     assert "relevant_tool" in prompt
     assert "another_relevant" in prompt
-    assert "irrelevant_1" not in prompt
-    assert "irrelevant_2" not in prompt
+    assert "irrelevant_1" in prompt
+    assert "irrelevant_2" in prompt
 
 
 def test_tool_rejection_missing_args(settings: Settings) -> None:
@@ -344,7 +343,7 @@ def test_claude_model_with_anthropic_tools_uses_emulation_by_default() -> None:
     from middleware.pipeline import ToolMiddlewarePipeline
     from m365_copilot_openai_proxy.models import AnthropicMessagesRequest, AnthropicMessage
 
-    pipeline = ToolMiddlewarePipeline(Settings(M365_ACCESS_TOKEN="fake"))
+    pipeline = ToolMiddlewarePipeline(Settings(access_token="fake"))
     request = AnthropicMessagesRequest(
         model="claude-sonnet-4-6",
         messages=[AnthropicMessage(role="user", content="read package.json")],

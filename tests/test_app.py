@@ -73,8 +73,14 @@ class FailingStreamCopilotClient(FakeCopilotClient):
         yield ""
 
 
-def build_client(fake: FakeCopilotClient) -> TestClient:
-    settings = Settings(M365_ACCESS_TOKEN="fake-token", M365_PERSIST_DEFAULT=False)
+def build_client(fake: FakeCopilotClient, settings: Settings | None = None) -> TestClient:
+    if settings is None:
+        settings = Settings(
+            access_token="fake-token",
+            persist_default=False,
+            tool_middleware_enabled=True,
+            tool_emulation_enabled=True,
+        )
     app = create_app(settings=settings, copilot_client_factory=lambda: fake)
     return TestClient(app)
 
@@ -96,7 +102,7 @@ def test_models_endpoint() -> None:
 
 
 def test_app_starts_without_token_for_startup_capture() -> None:
-    app = create_app(settings=Settings(M365_ACCESS_TOKEN=""))
+    app = create_app(settings=Settings(access_token=""))
     client = TestClient(app)
 
     response = client.get("/v1/token/status")
@@ -107,7 +113,7 @@ def test_app_starts_without_token_for_startup_capture() -> None:
 
 
 def test_token_status_reports_expiry() -> None:
-    settings = Settings(M365_ACCESS_TOKEN=make_jwt(int(time.time()) + 3600))
+    settings = Settings(access_token=make_jwt(int(time.time()) + 3600))
     app = create_app(
         settings=settings, copilot_client_factory=lambda: FakeCopilotClient()
     )
@@ -123,7 +129,7 @@ def test_token_status_reports_expiry() -> None:
 
 
 def test_healthz_includes_token_remaining_time() -> None:
-    settings = Settings(M365_ACCESS_TOKEN=make_jwt(int(time.time()) + 3600))
+    settings = Settings(access_token=make_jwt(int(time.time()) + 3600))
     app = create_app(
         settings=settings, copilot_client_factory=lambda: FakeCopilotClient()
     )
@@ -140,7 +146,7 @@ def test_healthz_includes_token_remaining_time() -> None:
 
 def test_token_status_rejects_non_substrate_token() -> None:
     settings = Settings(
-        M365_ACCESS_TOKEN=make_jwt(int(time.time()) + 3600, aud="394866fc-eedb")
+        access_token=make_jwt(int(time.time()) + 3600, aud="394866fc-eedb")
     )
     app = create_app(
         settings=settings, copilot_client_factory=lambda: FakeCopilotClient()
@@ -166,11 +172,11 @@ def test_substrate_client_rejects_non_substrate_token() -> None:
         raise AssertionError("SubstrateCopilotClient accepted a non-Substrate token")
 
 
-def test_default_client_factory_reloads_token_from_env(tmp_path, monkeypatch) -> None:
+def test_default_client_factory_reloads_token_from_config(tmp_path, monkeypatch) -> None:
     first_token = make_jwt(int(time.time()) + 3600)
     second_token = make_jwt(int(time.time()) + 7200)
-    env_path = tmp_path / ".env"
-    env_path.write_text(f"M365_ACCESS_TOKEN={first_token}\n", encoding="utf-8")
+    config_path = tmp_path / "config.ini"
+    config_path.write_text(f"[settings]\naccess_token = {first_token}\n", encoding="utf-8")
     monkeypatch.chdir(tmp_path)
 
     seen_tokens: list[str] = []
@@ -184,12 +190,12 @@ def test_default_client_factory_reloads_token_from_env(tmp_path, monkeypatch) ->
         "m365_copilot_openai_proxy.app.SubstrateCopilotClient",
         RecordingCopilotClient,
     )
-    settings = Settings(M365_ACCESS_TOKEN=first_token)
+    settings = Settings(access_token=first_token)
     app = create_app(settings=settings)
     client = TestClient(app)
 
     time.sleep(0.01)
-    env_path.write_text(f"M365_ACCESS_TOKEN={second_token}\n", encoding="utf-8")
+    config_path.write_text(f"[settings]\naccess_token = {second_token}\n", encoding="utf-8")
     response = client.post(
         "/v1/chat/completions",
         json={"model": "ignored", "messages": [{"role": "user", "content": "Hello"}]},
@@ -199,24 +205,23 @@ def test_default_client_factory_reloads_token_from_env(tmp_path, monkeypatch) ->
     assert seen_tokens == [second_token]
 
 
-def test_cli_reads_current_token_from_env(tmp_path, monkeypatch) -> None:
+def test_cli_reads_current_token_from_config(tmp_path, monkeypatch) -> None:
     token = make_jwt(int(time.time()) + 3600)
-    (tmp_path / ".env").write_text(f"M365_ACCESS_TOKEN='{token}'\n", encoding="utf-8")
+    (tmp_path / "config.ini").write_text(f"[settings]\naccess_token = '{token}'\n", encoding="utf-8")
     monkeypatch.chdir(tmp_path)
 
     assert _read_token() == token
 
 
-def test_cli_write_token_ignores_commented_token_line(tmp_path, monkeypatch) -> None:
+def test_cli_write_token_config(tmp_path, monkeypatch) -> None:
     token = make_jwt(int(time.time()) + 3600)
-    env_path = tmp_path / ".env"
-    env_path.write_text("# M365_ACCESS_TOKEN=old\nOTHER=value\n", encoding="utf-8")
+    config_path = tmp_path / "config.ini"
+    config_path.write_text("[settings]\naccess_token = old\n", encoding="utf-8")
     monkeypatch.chdir(tmp_path)
 
     _write_token(token)
 
     assert _read_token() == token
-    assert env_path.read_text(encoding="utf-8").count("M365_ACCESS_TOKEN=") == 2
 
 
 def test_cli_seconds_remaining_uses_jwt_exp() -> None:
@@ -341,6 +346,31 @@ def test_cli_debug_browser_path_keeps_windows_default(monkeypatch) -> None:
     )
 
 
+def test_cli_macos_browser_path_resolves(monkeypatch) -> None:
+    monkeypatch.setattr("m365_copilot_openai_proxy.cli.os.name", "posix")
+    monkeypatch.setattr("m365_copilot_openai_proxy.cli.sys.platform", "darwin")
+
+    monkeypatch.setattr(
+        "m365_copilot_openai_proxy.cli.Path.exists",
+        lambda self: "Microsoft Edge" in str(self)
+    )
+
+    assert (
+        _resolve_debug_browser_path()
+        == "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"
+    )
+
+
+def test_cli_no_browser_found_raises_runtime_error(monkeypatch) -> None:
+    monkeypatch.setattr("m365_copilot_openai_proxy.cli.os.name", "posix")
+    monkeypatch.setattr("m365_copilot_openai_proxy.cli.sys.platform", "linux")
+    monkeypatch.setattr("m365_copilot_openai_proxy.cli.shutil.which", lambda _name: None)
+
+    import pytest
+    with pytest.raises(RuntimeError, match="Could not automatically locate"):
+        _resolve_debug_browser_path()
+
+
 def test_cli_linux_snap_profile_dir_uses_non_hidden_home(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr("m365_copilot_openai_proxy.cli.sys.platform", "linux")
     monkeypatch.setattr("m365_copilot_openai_proxy.cli.Path.home", lambda: tmp_path)
@@ -368,7 +398,7 @@ def test_cli_linux_close_debug_browser_calls_cdp(monkeypatch) -> None:
     assert called_port == 1234
 
 
-def test_cli_close_debug_browser_honors_setting(monkeypatch) -> None:
+def test_cli_close_debug_browser_honors_setting(monkeypatch, tmp_path) -> None:
     from m365_copilot_openai_proxy.cli import _close_debug_browser
 
     called = False
@@ -380,7 +410,8 @@ def test_cli_close_debug_browser_honors_setting(monkeypatch) -> None:
     monkeypatch.setattr(
         "m365_copilot_openai_proxy.cli._cdp_close_browser", fake_cdp_close
     )
-    monkeypatch.setenv("M365_HIDE_ON_TOKEN_SUCCESS", "false")
+    (tmp_path / "config.ini").write_text("[settings]\nhide_on_token_success = false\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
 
     _close_debug_browser(1234)
     assert not called
@@ -419,6 +450,72 @@ def test_openai_chat_completion_translates_history() -> None:
     assert fake.sessions == [None]
 
 
+def test_injection_plus_user_message_is_sent() -> None:
+    from pathlib import Path
+    expected_injection = Path("prompts/tool_emulation_injection.md").read_text("utf-8")
+
+    fake = FakeCopilotClient()
+    client = build_client(fake)
+    
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "m365-copilot",
+            "messages": [
+                {"role": "user", "content": "My unique user message"}
+            ],
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "my_test_tool",
+                        "description": "A tool to test",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"arg1": {"type": "string"}},
+                            "required": ["arg1"]
+                        }
+                    }
+                }
+            ]
+        },
+    )
+    assert response.status_code == 200
+    
+    assert len(fake.calls) == 1
+    sent_prompt, sent_context = fake.calls[0]
+    
+    assert expected_injection.strip() in sent_prompt
+    assert "My unique user message" in sent_prompt
+    assert "my_test_tool" in sent_prompt
+
+
+def test_unmodified_user_message_when_middleware_disabled() -> None:
+    fake = FakeCopilotClient()
+    settings = Settings(
+        access_token="fake-token",
+        persist_default=False,
+        tool_middleware_enabled=False,
+        tool_emulation_enabled=False,
+    )
+    client = build_client(fake, settings=settings)
+    
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "m365-copilot",
+            "messages": [
+                {"role": "user", "content": "Hello totally unmodified message!"}
+            ]
+        },
+    )
+    assert response.status_code == 200
+    assert len(fake.calls) == 1
+    sent_prompt, sent_context = fake.calls[0]
+    
+    assert sent_prompt == "Hello totally unmodified message!"
+
+
 def test_openai_persistent_session_header_reuses_session() -> None:
     fake = FakeCopilotClient()
     client = build_client(fake)
@@ -440,27 +537,32 @@ def test_openai_persistent_session_header_reuses_session() -> None:
     assert fake.sessions[0] is not None
 
 
-def test_m365_session_env_disables_temporary_memory(monkeypatch) -> None:
+def test_m365_session_config_disables_temporary_memory(monkeypatch, tmp_path) -> None:
     from m365_copilot_openai_proxy.app import _effective_disable_memory
 
-    settings = types.SimpleNamespace(disable_memory=True)
+    monkeypatch.chdir(tmp_path)
 
-    monkeypatch.delenv("M365_SESSION", raising=False)
+    (tmp_path / "config.ini").write_text("[settings]\nsession_id = \n", encoding="utf-8")
+    settings = Settings(disable_memory=True)
     assert _effective_disable_memory(settings) is True
 
-    monkeypatch.setenv("M365_SESSION", "work")
+    (tmp_path / "config.ini").write_text("[settings]\nsession_id = work\n", encoding="utf-8")
+    settings = Settings(disable_memory=True)
     assert _effective_disable_memory(settings) is False
 
-    monkeypatch.delenv("M365_SESSION", raising=False)
+    (tmp_path / "config.ini").write_text("[settings]\nsession_id = \n", encoding="utf-8")
+    settings = Settings(disable_memory=True)
     assert _effective_disable_memory(settings) is True
 
     settings.disable_memory = False
     assert _effective_disable_memory(settings) is False
 
 
-def test_m365_session_env_prints_on_startup(monkeypatch, capsys) -> None:
+def test_m365_session_config_prints_on_startup(monkeypatch, tmp_path, capsys) -> None:
+    (tmp_path / "config.ini").write_text("[settings]\nsession_id = work\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
     fake = FakeCopilotClient()
-    monkeypatch.setenv("M365_SESSION", "work")
 
     with build_client(fake):
         pass
@@ -468,7 +570,10 @@ def test_m365_session_env_prints_on_startup(monkeypatch, capsys) -> None:
     assert "X-M365-Session-Id: Session attached: work" in capsys.readouterr().out
 
 
-def test_openai_persistent_session_env_reuses_session(monkeypatch) -> None:
+def test_openai_persistent_session_config_reuses_session(monkeypatch, tmp_path) -> None:
+    (tmp_path / "config.ini").write_text("[settings]\nsession_id = work\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
     fake = FakeCopilotClient()
     client = build_client(fake)
     body = {
@@ -476,7 +581,6 @@ def test_openai_persistent_session_env_reuses_session(monkeypatch) -> None:
         "messages": [{"role": "user", "content": "Hello"}],
     }
 
-    monkeypatch.setenv("M365_SESSION", "work")
     first = client.post("/v1/chat/completions", json=body)
     second = client.post("/v1/chat/completions", json=body)
 
@@ -487,7 +591,10 @@ def test_openai_persistent_session_env_reuses_session(monkeypatch) -> None:
     assert "X-M365-Session-Id: Session attached: work" not in fake.calls[0][1]
 
 
-def test_openai_persistent_session_header_overrides_env(monkeypatch) -> None:
+def test_openai_persistent_session_header_overrides_config(monkeypatch, tmp_path) -> None:
+    (tmp_path / "config.ini").write_text("[settings]\nsession_id = env-work\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
     fake = FakeCopilotClient()
     client = build_client(fake)
     body = {
@@ -495,7 +602,6 @@ def test_openai_persistent_session_header_overrides_env(monkeypatch) -> None:
         "messages": [{"role": "user", "content": "Hello"}],
     }
 
-    monkeypatch.setenv("M365_SESSION", "env-work")
     first = client.post(
         "/v1/chat/completions", headers={"X-M365-Session-Id": "header-work"}, json=body
     )
@@ -646,8 +752,8 @@ def test_anthropic_messages_passthrough_only_for_non_m365_models(monkeypatch) ->
     monkeypatch.setattr(ap, "forward_messages", fake_forward)
 
     settings = Settings(
-        M365_ACCESS_TOKEN="fake-token",
-        M365_PERSIST_DEFAULT=False,
+        access_token="fake-token",
+        persist_default=False,
         M365_ANTHROPIC_PASSTHROUGH=True,
     )
     fake = FakeCopilotClient()
@@ -873,6 +979,108 @@ def test_anthropic_messages_does_not_log_all_offered_tools(capsys) -> None:
     assert "-> tool=bash" not in out
 
 
+class AnthropicToolUseCopilotClient(FakeCopilotClient):
+    async def chat(
+        self,
+        prompt: str,
+        additional_context: list[str],
+        session: object | None = None,
+        tone: str | None = None,
+        images: list[dict[str, str]] | None = None,
+    ) -> str:
+        self.calls.append((prompt, additional_context))
+        self.sessions.append(session)
+        return (
+            '<<<TOOL_CALLS>>>\n'
+            '[{"name":"Read","arguments":{"file_path":"README.md"}}]\n'
+            '<<<END_TOOL_CALLS>>>'
+        )
+
+
+def test_anthropic_messages_emulates_tool_use_response_shape() -> None:
+    fake = AnthropicToolUseCopilotClient()
+    client = build_client(fake)
+
+    response = client.post(
+        "/v1/messages",
+        json={
+            "model": "ignored",
+            "messages": [{"role": "user", "content": "Read README.md"}],
+            "tools": [
+                {
+                    "name": "Read",
+                    "description": "Read file contents",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {"file_path": {"type": "string"}},
+                        "required": ["file_path"],
+                    },
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["type"] == "message"
+    assert body["role"] == "assistant"
+    assert body["stop_reason"] == "tool_use"
+    assert body["content"] == [
+        {
+            "type": "tool_use",
+            "id": body["content"][0]["id"],
+            "name": "Read",
+            "input": {"file_path": "README.md"},
+        }
+    ]
+    assert body["content"][0]["id"].startswith("call_")
+    assert fake.calls
+    assert "# Callable functions" in fake.calls[0][0]
+    assert "Read(input_schema=" in fake.calls[0][0]
+    assert "Read file contents" in fake.calls[0][0]
+    assert "\"file_path\": {\"type\": \"string\"}" in fake.calls[0][0]
+
+
+def test_anthropic_messages_emulates_streaming_tool_use_events() -> None:
+    fake = AnthropicToolUseCopilotClient()
+    client = build_client(fake)
+
+    with client.stream(
+        "POST",
+        "/v1/messages",
+        json={
+            "model": "ignored",
+            "stream": True,
+            "messages": [{"role": "user", "content": "Read README.md"}],
+            "tools": [
+                {
+                    "name": "Read",
+                    "description": "Read file contents",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {"file_path": {"type": "string"}},
+                        "required": ["file_path"],
+                    },
+                }
+            ],
+        },
+    ) as response:
+        payload = "".join(
+            chunk.decode("utf-8") if isinstance(chunk, bytes) else chunk
+            for chunk in response.iter_text()
+        )
+
+    assert response.status_code == 200
+    assert "event: content_block_start" in payload
+    assert '"type": "tool_use"' in payload
+    assert '"name": "Read"' in payload
+    assert "event: content_block_delta" in payload
+    assert '"type": "input_json_delta"' in payload
+    assert '\\"file_path\\": \\"README.md\\"' in payload
+    assert '"stop_reason": "tool_use"' in payload
+    assert "event: message_stop" in payload
+
+
 def test_anthropic_streaming_returns_error_event_on_upstream_failure() -> None:
     client = build_client(FailingStreamCopilotClient())
     with client.stream(
@@ -921,7 +1129,11 @@ def test_endpoints_with_tool_emulation_injection(tmp_path, monkeypatch) -> None:
     injection_file = tmp_path / "tool_emulation_injection.md"
     injection_file.write_text("CUSTOM_INJECTION_HEADER", encoding="utf-8")
     
-    monkeypatch.setenv("TOOL_EMULATION_INJECTION_PATH", str(injection_file))
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config.ini").write_text(
+        f"[settings]\ntool_emulation_injection_path = {str(injection_file.as_posix())}\n",
+        encoding="utf-8",
+    )
     
     try:
         import middleware.tool_emulation
@@ -969,9 +1181,234 @@ def test_endpoints_with_tool_emulation_injection(tmp_path, monkeypatch) -> None:
         assert fake.calls[2][0].startswith("CUSTOM_INJECTION_HEADER\n---\nHello Responses")
         
     finally:
-        monkeypatch.delenv("TOOL_EMULATION_INJECTION_PATH", raising=False)
         import middleware.tool_emulation
         import middleware.pipeline
         importlib.reload(middleware.tool_emulation)
         importlib.reload(middleware.pipeline)
+
+
+def test_autonomous_react_loop_flow() -> None:
+    class FakeAutonomousCopilotClient:
+        def __init__(self):
+            self.calls = []
+            self.turn = 0
+            
+        async def chat(self, prompt, additional_context, session, tone, images=None):
+            self.calls.append((prompt, additional_context))
+            self.turn += 1
+            if self.turn == 1:
+                return "<<<TOOL_CALLS>>>\n" + json.dumps([{"name": "test_tool", "arguments": {"arg1": "hello"}}]) + "\n<<<END_TOOL_CALLS>>>"
+            else:
+                return "The tool executed successfully and returned the answer!"
+                
+    fake = FakeAutonomousCopilotClient()
+    settings = Settings(
+        access_token="fake-token",
+        persist_default=False,
+        tool_middleware_enabled=True,
+        tool_emulation_enabled=True,
+        tool_emulation_execution_enabled=True,
+    )
+    
+    from middleware.runtime_bridge import TOOLS
+    TOOLS["test_tool"] = lambda root, args: ({"status": "success", "result": "mocked output"}, {"args": args})
+    
+    try:
+        client = build_client(fake, settings=settings)
+        
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "m365-copilot",
+                "messages": [
+                    {"role": "user", "content": "Run the test tool!"}
+                ],
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "test_tool",
+                            "description": "A tool to test",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {"arg1": {"type": "string"}},
+                                "required": ["arg1"]
+                            }
+                        }
+                    }
+                ]
+            },
+        )
+        assert response.status_code == 200
+        body = response.json()
+        
+        assert body["choices"][0]["message"]["content"] == "The tool executed successfully and returned the answer!"
+        assert len(fake.calls) == 2
+        assert "test_tool" in fake.calls[0][0]
+        assert "Tool result [test_tool]" in fake.calls[1][1][-1]
+        assert "mocked output" in fake.calls[1][1][-1]
+    finally:
+        del TOOLS["test_tool"]
+
+
+def test_mixed_local_and_platform_run_prioritization() -> None:
+    class FakeMixedCopilotClient:
+        def __init__(self):
+            self.calls = []
+            
+        async def chat(self, prompt, additional_context, session, tone, images=None):
+            self.calls.append((prompt, additional_context))
+            return "<<<TOOL_CALLS>>>\n" + json.dumps([
+                {"name": "read", "arguments": {"filePath": "src/main.py"}},
+                {"name": "platform_only_tool", "arguments": {}}
+            ]) + "\n<<<END_TOOL_CALLS>>>"
+                
+    fake = FakeMixedCopilotClient()
+    settings = Settings(
+        access_token="fake-token",
+        persist_default=False,
+        tool_middleware_enabled=True,
+        tool_emulation_enabled=True,
+        tool_emulation_execution_enabled=True,
+    )
+    
+    client = build_client(fake, settings=settings)
+    
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "m365-copilot",
+            "messages": [
+                {"role": "user", "content": "Run tools!"}
+            ],
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "read",
+                        "parameters": {"type": "object", "properties": {"filePath": {"type": "string"}}, "required": ["filePath"]}
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "platform_only_tool",
+                        "parameters": {"type": "object", "properties": {}}
+                    }
+                }
+            ]
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    
+    assert "tool_calls" in body["choices"][0]["message"]
+    tool_calls = body["choices"][0]["message"]["tool_calls"]
+    assert len(tool_calls) == 2
+    tool_names = {tc["function"]["name"] for tc in tool_calls}
+    assert "read" in tool_names
+    assert "platform_only_tool" in tool_names
+
+
+def test_tool_run_mode_platform_forces_platform_run() -> None:
+    class FakeCopilotClient:
+        def __init__(self):
+            self.calls = []
+            
+        async def chat(self, prompt, additional_context, session, tone, images=None):
+            self.calls.append((prompt, additional_context))
+            return "<<<TOOL_CALLS>>>\n" + json.dumps([
+                {"name": "read", "arguments": {"filePath": "src/main.py"}}
+            ]) + "\n<<<END_TOOL_CALLS>>>"
+                
+    fake = FakeCopilotClient()
+    settings = Settings(
+        access_token="fake-token",
+        persist_default=False,
+        tool_middleware_enabled=True,
+        tool_emulation_enabled=True,
+        tool_emulation_execution_enabled=True,
+        tool_emulation_run_mode="platform",
+    )
+    
+    client = build_client(fake, settings=settings)
+    
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "m365-copilot",
+            "messages": [
+                {"role": "user", "content": "Run tools!"}
+            ],
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "read",
+                        "parameters": {"type": "object", "properties": {"filePath": {"type": "string"}}, "required": ["filePath"]}
+                    }
+                }
+            ]
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    
+    assert "tool_calls" in body["choices"][0]["message"]
+    assert len(body["choices"][0]["message"]["tool_calls"]) == 1
+    assert body["choices"][0]["message"]["tool_calls"][0]["function"]["name"] == "read"
+
+
+def test_tool_run_mode_local_forces_local_run() -> None:
+    class FakeAutonomousCopilotClient:
+        def __init__(self):
+            self.calls = []
+            self.turn = 0
+            
+        async def chat(self, prompt, additional_context, session, tone, images=None):
+            self.calls.append((prompt, additional_context))
+            self.turn += 1
+            if self.turn == 1:
+                return "<<<TOOL_CALLS>>>\n" + json.dumps([{"name": "read", "arguments": {"filePath": "src/main.py"}}]) + "\n<<<END_TOOL_CALLS>>>"
+            else:
+                return "Successfully read local file!"
+                
+    fake = FakeAutonomousCopilotClient()
+    settings = Settings(
+        access_token="fake-token",
+        persist_default=False,
+        tool_middleware_enabled=True,
+        tool_emulation_enabled=True,
+        tool_emulation_execution_enabled=True,
+        tool_emulation_run_mode="local",
+    )
+    
+    client = build_client(fake, settings=settings)
+    
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "m365-copilot",
+            "messages": [
+                {"role": "user", "content": "Read main.py!"}
+            ],
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "read",
+                        "parameters": {"type": "object", "properties": {"filePath": {"type": "string"}}, "required": ["filePath"]}
+                    }
+                }
+            ]
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    
+    assert body["choices"][0]["message"]["content"] == "Successfully read local file!"
+    assert len(fake.calls) == 2
+
+
+
 

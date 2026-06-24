@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import configparser
 import json
 import threading
 import time
@@ -22,9 +23,9 @@ def is_substrate_token_claims(claims: dict[str, Any]) -> bool:
 
 
 class AccessTokenStore:
-    def __init__(self, token: str, env_path: Path | str = ".env"):
+    def __init__(self, token: str, config_path: Path | str = "config.ini"):
         self._token = token
-        self._env_path = Path(env_path)
+        self._config_path = Path(config_path)
         self._mtime_ns = self._read_mtime()
         self._lock = threading.RLock()
 
@@ -67,35 +68,30 @@ class AccessTokenStore:
         mtime_ns = self._read_mtime()
         if mtime_ns is None or mtime_ns == self._mtime_ns:
             return
-        token = _read_env_token(self._env_path)
+        token = _read_ini_token(self._config_path)
         if token:
             self._token = token
             self._mtime_ns = mtime_ns
 
     def _read_mtime(self) -> int | None:
         try:
-            return self._env_path.stat().st_mtime_ns
+            return self._config_path.stat().st_mtime_ns
         except FileNotFoundError:
             return None
 
 
-def _read_env_token(path: Path) -> str | None:
+def _read_ini_token(path: Path) -> str | None:
     try:
-        text = path.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        return None
-
-    for line in text.splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        key, sep, value = stripped.partition("=")
-        if sep and key.strip() == "M365_ACCESS_TOKEN":
-            return _clean_env_value(value)
+        parser = configparser.ConfigParser()
+        parser.read(path, encoding="utf-8")
+        if parser.has_section("settings") and parser.has_option("settings", "access_token"):
+            return _clean_ini_value(parser.get("settings", "access_token"))
+    except Exception:
+        pass
     return None
 
 
-def _clean_env_value(value: str) -> str:
+def _clean_ini_value(value: str) -> str:
     value = value.strip()
     if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
         return value[1:-1]

@@ -45,7 +45,7 @@ from middleware.pipeline import ToolMiddlewarePipeline
 
 
 def _debug_dump(label: str, content: str) -> None:
-    if not os.environ.get("M365_DEBUG"):
+    if not Settings().debug:
         return
     try:
         with Path("debug.log").open("a", encoding="utf-8") as f:
@@ -56,17 +56,14 @@ def _debug_dump(label: str, content: str) -> None:
 
 _PERSIST_MODEL_SUFFIX = ":persist"
 _SESSION_ID_HEADER = "x-m365-session-id"
-_SESSION_ID_ENV = "M365_SESSION"
-
-
-def _session_id_env_value() -> str:
-    return (os.environ.get(_SESSION_ID_ENV) or "").strip()
+def _session_id_config_value() -> str:
+    return (Settings().session_id or "").strip()
 
 
 def _effective_disable_memory(settings: Settings) -> bool:
     # A fixed external session is meant to reuse the same Copilot conversation with memory/history.
     # Temporary chat (`disableMemory=1`) would prevent that, so turn it off when M365_SESSION is set.
-    if _session_id_env_value():
+    if _session_id_config_value():
         return False
     return settings.disable_memory
 
@@ -120,7 +117,7 @@ def create_app(
 
     @app.on_event("startup")
     async def _print_session_attached_on_startup() -> None:
-        if session := _session_id_env_value():
+        if session := _session_id_config_value():
             print(f"X-M365-Session-Id: Session attached: {session}", flush=True)
     app.state.copilot_client_factory = copilot_client_factory or (
         lambda: SubstrateCopilotClient(
@@ -246,12 +243,9 @@ def create_app(
                     "REQUEST",
                     f"tools={tool_names}\ntool_choice={request.tool_choice}\nctx={json.dumps(ctx, ensure_ascii=False)[:4000]}",
                 )
-                from middleware.tool_emulation import _INJECTION_CONTENT
-                clean_prompt = translated.prompt
-                if _INJECTION_CONTENT.strip() and clean_prompt.startswith(_INJECTION_CONTENT + "\n---\n"):
-                    clean_prompt = clean_prompt[len(_INJECTION_CONTENT + "\n---\n"):]
+                clean_prompt = _strip_injection_content(translated.prompt)
                 # Put the protocol IN the user turn
-                prompt = f"{tools_prompt}\n\n# Conversation / current request\n{clean_prompt}"
+                prompt = f"{tools_prompt}\n\n# User message\n{clean_prompt}"
                 _debug_dump("FINAL PROMPT", prompt[:6000])
 
             if request.stream:
@@ -366,13 +360,10 @@ def create_app(
             prompt = translated.prompt
             if tools_prompt:
                 ctx = [c for c in ctx if not c.startswith("System instructions:")]
-                from middleware.tool_emulation import _INJECTION_CONTENT
-                clean_prompt = translated.prompt
-                if _INJECTION_CONTENT.strip() and clean_prompt.startswith(_INJECTION_CONTENT + "\n---\n"):
-                    clean_prompt = clean_prompt[len(_INJECTION_CONTENT + "\n---\n"):]
+                clean_prompt = _strip_injection_content(translated.prompt)
                 prompt = (
                     f"{tools_prompt}\n\n"
-                    f"# Conversation / current request\n{clean_prompt}"
+                    f"# User message\n{clean_prompt}"
                 )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -485,11 +476,8 @@ def create_app(
             )
             if tools_prompt:
                 ctx = [c for c in ctx if not c.startswith("System instructions:")]
-                from middleware.tool_emulation import _INJECTION_CONTENT
-                clean_prompt = translated.prompt
-                if _INJECTION_CONTENT.strip() and clean_prompt.startswith(_INJECTION_CONTENT + "\n---\n"):
-                    clean_prompt = clean_prompt[len(_INJECTION_CONTENT + "\n---\n"):]
-                prompt = f"{tools_prompt}\n\n# Conversation / current request\n{clean_prompt}"
+                clean_prompt = _strip_injection_content(translated.prompt)
+                prompt = f"{tools_prompt}\n\n# User message\n{clean_prompt}"
 
             if request.stream:
                 return StreamingResponse(
@@ -592,8 +580,8 @@ def _args_obj(arguments: str) -> dict:
 
 
 # Per-process salt so a conversation key is not a bare content hash (privacy / no cross-store
-# collisions). Override with M365_SESSION_SALT to make keys stable across restarts.
-_SESSION_SALT = os.environ.get("M365_SESSION_SALT") or uuid.uuid4().hex
+# collisions). Set session_salt in config.ini to make keys stable across restarts.
+_SESSION_SALT = Settings().session_salt or uuid.uuid4().hex
 
 # Project/working-directory hint, so the SAME opening (e.g. /init) in DIFFERENT projects does
 # not collide into one substrate conversation. Labelled form first, then any absolute path.
@@ -605,6 +593,19 @@ _CWD_LABEL_RE = re.compile(
 _ANY_PATH_RE = re.compile(r"([A-Za-z]:[\\/][^\s\"'`<>\n]{2,}|/[A-Za-z0-9._\-/]{3,})")
 
 
+def _strip_injection_content(text: str) -> str:
+    from middleware.tool_emulation import _INJECTION_CONTENT
+    injection_strip = _INJECTION_CONTENT.strip()
+    if not injection_strip:
+        return text
+    escaped = re.escape(injection_strip)
+    pattern = re.compile(rf"^\s*{escaped}\s*\n?---\n?\s*", re.DOTALL)
+    match = pattern.match(text)
+    if match:
+        return text[match.end():]
+    return text
+
+
 def _msg_text(m) -> str:
     content = getattr(m, "content", "")
     if isinstance(content, list):
@@ -612,11 +613,7 @@ def _msg_text(m) -> str:
     else:
         text = str(content or "")
 
-    if "\n---\n" in text:
-        from middleware.pipeline import _INJECTION_CONTENT
-        if _INJECTION_CONTENT.strip() and text.startswith(_INJECTION_CONTENT + "\n---\n"):
-            text = text[len(_INJECTION_CONTENT + "\n---\n"):]
-    return text
+    return _strip_injection_content(text)
 
 
 def _project_hint(messages: list) -> str:
@@ -673,7 +670,7 @@ def _persistent_session(
     messages: list | None = None,
 ) -> PersistentSession | None:
     header_key = (raw_request.headers.get(_SESSION_ID_HEADER) or "").strip()
-    env_key = _session_id_env_value()
+    env_key = _session_id_config_value()
     if header_key:
         # Explicit client-supplied session id wins.
         key = f"header:{header_key}"
@@ -753,7 +750,7 @@ def _trim_history(ctx: list[str], session: PersistentSession | None) -> list[str
 async def _debug_raw(raw_request: Request) -> None:
     """Log inbound headers + top-level body keys, to discover any stable per-chat id the client
     sends (which we'd otherwise drop via pydantic extra='ignore')."""
-    if not os.environ.get("M365_DEBUG"):
+    if not Settings().debug:
         return
     try:
         headers = {
@@ -776,7 +773,7 @@ async def _debug_raw(raw_request: Request) -> None:
 def _debug_images(messages: list | None, images: list[ExtractedImage] | None) -> None:
     """Log exactly what the current user turn carried and what we resolved, so we can see
     whether VS Code sent an inline image, a file:// attachment, or an empty <attachments> tag."""
-    if not os.environ.get("M365_DEBUG"):
+    if not Settings().debug:
         return
     raw = ""
     for m in reversed(messages or []):

@@ -14,12 +14,13 @@ import websockets
 
 from .models import ExtractedImage, MessageAnnotation, UploadFileResponse
 from .session_store import PersistentSession
+from .config import Settings
 from .substrate_config import load_substrate_config
 from .token_store import decode_jwt_payload, is_substrate_token_claims
 
 SIGNALR_SEP = "\x1e"
 
-# Capture-derived protocol payload (see substrate.json / M365_SUBSTRATE_CONFIG). The frame
+# Capture-derived protocol payload (see substrate.json / substrate_config_path). The frame
 # *skeleton* stays in code below; only these data values come from config.
 _CFG = load_substrate_config()
 _WS_BASE = _CFG["ws_base"]
@@ -40,7 +41,7 @@ _ALLOWED_MESSAGE_TYPES = _CFG["allowed_message_types"]
 _FRAME = _CFG["frame"]
 
 # Default seconds without any frame from substrate before we give up (instead of hanging).
-# Overridable per-client via Settings (.env M365_RECV_TIMEOUT / M365_OPEN_TIMEOUT).
+# Overridable per-client via Settings/config.ini (recv_timeout / open_timeout).
 _RECV_TIMEOUT = 90
 _OPEN_TIMEOUT = 30
 
@@ -53,8 +54,8 @@ def resolve_tone(model: str | None) -> str:
 
 
 def _emit_timing(**fields: object) -> None:
-    """One parseable `TIMING ...` line per turn to debug.log when M365_TIMING is set."""
-    if not os.environ.get("M365_TIMING"):
+    """One parseable `TIMING ...` line per turn to debug.log when timing=true in config.ini."""
+    if not Settings().timing:
         return
     try:
         line = "TIMING " + " ".join(f"{k}={v}" for k, v in fields.items())
@@ -84,7 +85,7 @@ class SubstrateCopilotClient:
     ):
         if not access_token:
             raise SubstrateCopilotError(
-                "M365_ACCESS_TOKEN is missing. Start the debug Edge window and let startup token capture complete, "
+                "access_token is missing in config.ini. Start the debug Edge window and let startup token capture complete, "
                 "or run `uv run copilot-openai-proxy set-token`."
             )
         self._token = access_token
@@ -105,7 +106,7 @@ class SubstrateCopilotClient:
             raise SubstrateCopilotError(
                 "Access token expired. To refresh: open M365 Copilot in your browser, "
                 "DevTools → Network → filter 'substrate' → click the WebSocket → Headers → "
-                "copy the access_token= query param → update M365_ACCESS_TOKEN in .env"
+                "copy the access_token= query param → update access_token in config.ini"
             )
         self._oid: str = claims["oid"]
         self._tid: str = claims["tid"]

@@ -1,21 +1,20 @@
 """Message-bundle lookup for prompt fragments (Java messages.properties style).
 
 Resolution order for a key:
-  1. env / .env override   M365_PROMPT_<KEY>   (dots -> underscores, uppercased)
-  2. catalog file          messages.properties (or M365_PROMPT_CATALOG=<path>)
+  1. catalog file          messages.properties, or prompt_catalog_path in config.ini
 
 Values support {name}/{begin}/{end} placeholders (Python str.format) and \\n \\t \\\\ \\uXXXX escapes.
 """
 
 from __future__ import annotations
 
-import os
 import re
 from functools import lru_cache
 from importlib import resources
 from pathlib import Path
 
-_ENV_PREFIX = "M365_PROMPT_"
+from .config import Settings
+
 _UNICODE_RE = re.compile(r"\\u([0-9A-Fa-f]{4})")
 
 
@@ -65,11 +64,8 @@ def _parse_properties(text: str) -> dict[str, str]:
 
 @lru_cache(maxsize=1)
 def _catalog() -> dict[str, str]:
-    override = os.environ.get("M365_PROMPT_CATALOG")
-    if override:
-        path = Path(override)
-    else:
-        path = Path("./prompts/messages.properties")
+    configured = Settings().prompt_catalog_path
+    path = Path(configured) if configured else Path("./prompts/messages.properties")
     
     if not path.exists():
         raise FileNotFoundError(f"Prompts catalog file not found at {path.absolute()}")
@@ -78,13 +74,7 @@ def _catalog() -> dict[str, str]:
     return _parse_properties(text)
 
 
-def _env_key(key: str) -> str:
-    return _ENV_PREFIX + key.replace(".", "_").upper()
-
-
 def message(key: str, /, **params: str) -> str:
-    """Resolve a prompt fragment by key (env override wins), interpolating any {placeholders}."""
-    value = os.environ.get(_env_key(key))
-    if value is None:
-        value = _catalog().get(key, "")
+    """Resolve a prompt fragment by key, interpolating any {placeholders}."""
+    value = _catalog().get(key, "")
     return value.format(**params) if params else value

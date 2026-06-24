@@ -18,10 +18,11 @@ logger = logging.getLogger(__name__)
 _BEGIN = "<<<TOOL_CALLS>>>"
 _END = "<<<END_TOOL_CALLS>>>"
 
-# Load and cache tool emulation injection content at startup
-_env_path = os.environ.get("TOOL_EMULATION_INJECTION_PATH") or os.environ.get("M365_TOOL_EMULATION_INJECTION_PATH")
-if _env_path:
-    _injection_file_path = Path(_env_path)
+# Load and cache tool emulation injection content at startup.
+# Config is read from config.ini only; environment overrides are intentionally ignored.
+_configured_injection_path = Settings().tool_emulation_injection_path
+if _configured_injection_path:
+    _injection_file_path = Path(_configured_injection_path)
 else:
     _injection_file_path = Path("./prompts/tool_emulation_injection.md")
 
@@ -66,11 +67,14 @@ def _apply_message_injection(messages: list[Any]) -> None:
     if not _INJECTION_CONTENT.strip():
         return
 
+    escaped = re.escape(_INJECTION_CONTENT.strip())
+    pattern = re.compile(rf"^\s*{escaped}\s*\n?---\n?\s*", re.DOTALL)
+
     for msg in messages:
         role = getattr(msg, "role", None)
         if isinstance(role, str) and role.strip().lower() == "user":
             if isinstance(msg.content, str):
-                if msg.content.startswith(_INJECTION_CONTENT + "\n---\n"):
+                if pattern.match(msg.content):
                     continue
                 logger.debug(
                     f"Prepend injection length: {len(_INJECTION_CONTENT)}, first 50 chars: {repr(_INJECTION_CONTENT[:50])}"
@@ -94,7 +98,7 @@ def _apply_message_injection(messages: list[Any]) -> None:
                 if text_part is not None:
                     if hasattr(text_part, "text"):
                         val = text_part.text or ""
-                        if val.startswith(_INJECTION_CONTENT + "\n---\n"):
+                        if pattern.match(val):
                             continue
                         logger.debug(
                             f"Prepend injection length: {len(_INJECTION_CONTENT)}, first 50 chars: {repr(_INJECTION_CONTENT[:50])}"
@@ -102,7 +106,7 @@ def _apply_message_injection(messages: list[Any]) -> None:
                         text_part.text = f"{_INJECTION_CONTENT}\n---\n{val}"
                     elif isinstance(text_part, dict):
                         val = text_part.get("text") or ""
-                        if val.startswith(_INJECTION_CONTENT + "\n---\n"):
+                        if pattern.match(val):
                             continue
                         logger.debug(
                             f"Prepend injection length: {len(_INJECTION_CONTENT)}, first 50 chars: {repr(_INJECTION_CONTENT[:50])}"
@@ -285,30 +289,8 @@ class ToolEmulationPipeline:
                 raise ValueError(f"Forced tool '{forced_name}' not found in tools.")
             return filtered
 
-        if len(tools) <= self.settings.tool_emulation_max_tools_in_prompt:
-            return tools
-
-        # Deterministic Ranking
-        # Extract terms from last user message
-        query_terms = set()
-        if request.messages:
-            last_msg = request.messages[-1]
-            if getattr(last_msg, "role", "") in ("user", "system", "developer"):
-                content = getattr(last_msg, "content", "")
-                if isinstance(content, str):
-                    query_terms = set(re.findall(r"\w+", content.lower()))
-
-        def score_tool(t: dict[str, Any]) -> int:
-            text = f"{t.get('name', '')} {t.get('description', '')}".lower()
-            params = t.get("parameters", {}).get("properties", {})
-            for p in params:
-                text += f" {p}"
-            terms = set(re.findall(r"\w+", text))
-            return len(query_terms & terms)
-
-        # Sort by score descending, then by name alphabetically for determinism
-        ranked = sorted(tools, key=lambda t: (-score_tool(t), t.get("name", "")))
-        return ranked[: self.settings.tool_emulation_max_tools_in_prompt]
+        # Do not limit the model or use keyword-based tool reduction; return all tools as-is.
+        return tools
 
     def _get_prompt_cache_key(
         self, tools: list[dict[str, Any]], tool_choice: Any
@@ -351,7 +333,7 @@ class ToolEmulationPipeline:
 
     def _render_prompt(self, tools: list[dict[str, Any]], tool_choice: Any) -> str:
         # The fixed prose comes from the shared message bundle (messages.properties /
-        # M365_PROMPT_TOOLS_*); only the per-tool signatures and sentinels are built here.
+        # prompt catalog tool keys); only the per-tool signatures and sentinels are built here.
         if not tools and tool_choice in (None, "auto"):
             return ""
 
@@ -367,6 +349,63 @@ class ToolEmulationPipeline:
         ]
         for t in displayed_tools:
             lines.append(f"- {self._tool_signature(t)}")
+
+        if forced_name:
+            lines += ["", message("tools.forced", name=forced_name)]
+        elif tool_choice == "required":
+            lines += ["", message("tools.required")]
+
+        final_prompt = "\n".join(lines)
+        cap_total = self.settings.tool_emulation_max_tool_schema_chars
+        if len(final_prompt) > cap_total:
+            final_prompt = final_prompt[: cap_total - 3] + "..."
+        return final_prompt
+
+    def _anthropic_tool_signature(self, tool: dict[str, Any]) -> str:
+        name = str(tool.get("name") or "unknown")
+        desc = str(tool.get("description") or "").replace("\n", " ").strip()
+        schema = tool.get("input_schema")
+        if not isinstance(schema, dict):
+            schema = tool.get("parameters") if isinstance(tool.get("parameters"), dict) else {}
+        schema_json = json.dumps(schema, ensure_ascii=False, sort_keys=True)
+        sig = f"{name}(input_schema={schema_json})"
+        if desc:
+            sig += f" - {desc}"
+        cap = self.settings.tool_emulation_max_single_tool_schema_chars
+        if len(sig) > cap:
+            sig = sig[: cap - 3] + "..."
+        return sig
+
+    def render_anthropic_prompt(
+        self,
+        original_tools: list[dict[str, Any]],
+        reduced_tools: list[dict[str, Any]],
+        tool_choice: Any,
+    ) -> str:
+        if not reduced_tools and tool_choice in (None, "auto"):
+            return ""
+
+        allowed_names = {t.get("name") for t in reduced_tools}
+        forced_name = self._forced_tool_name(tool_choice)
+        displayed_tools = [
+            t for t in original_tools
+            if t.get("name") in allowed_names and (not forced_name or t.get("name") == forced_name)
+        ]
+
+        # If an Anthropic-compatible client supplied tools only after adapter
+        # normalization, still render something useful rather than dropping the
+        # tool list. The normal path above preserves each original name,
+        # description, and input_schema exactly as supplied.
+        if not displayed_tools:
+            displayed_tools = reduced_tools
+
+        lines = [
+            _INJECTION_CONTENT,
+            "",
+            "# Callable functions",
+        ]
+        for t in displayed_tools:
+            lines.append(f"- {self._anthropic_tool_signature(t)}")
 
         if forced_name:
             lines += ["", message("tools.forced", name=forced_name)]
@@ -670,6 +709,8 @@ class ToolEmulationPipeline:
     ) -> Tuple[list[ToolCall] | None, str]:
         """
         Executes the LLM call with retry loop for parsing and fixing malformed tool blocks.
+        If a tool call is parsed, executes it locally via RuntimeBridge, sends the result back,
+        and returns the final text result.
         """
         text = await client.chat(prompt, additional_context, session, tone, images)
         calls = self.parse_response(
@@ -695,9 +736,64 @@ class ToolEmulationPipeline:
                 text, normalized_tools, workspace_root=workspace_root
             )
 
-        # Guarantee no internal wire token ever reaches the user. When calls were
-        # extracted the caller ignores `text`; when they weren't, `text` is the
-        # surfaced reply and may still carry the sentinel (a malformed block, a
-        # dangling open marker, or a stray mention). Scrubbing in every case is a
-        # belt-and-braces redaction: callers never see the raw sentinel.
-        return calls, self._redact_tool_sentinels(text)
+        # Determine whether to execute locally based on the config run_mode:
+        # If execution_enabled is False, or run_mode is "platform", always bypass local execution.
+        run_mode = (self.settings.tool_emulation_run_mode or "auto").strip().lower()
+        
+        if self.settings.tool_emulation_execution_enabled and run_mode != "platform":
+            iterations = 0
+            max_iterations = max(1, self.settings.tool_emulation_max_agent_iterations)
+            
+            while calls and iterations < max_iterations:
+                from .runtime_bridge import RuntimeBridge
+                bridge = RuntimeBridge(
+                    root_dir=workspace_root or ".",
+                    allow_bash=not self.settings.tool_emulation_execution_sandbox
+                )
+                
+                # In "auto" mode, we only run locally if ALL parsed tool calls are supported locally.
+                # If run_mode is "local", we proceed with local execution regardless.
+                if run_mode == "auto":
+                    all_supported = True
+                    for call in calls:
+                        if call.function.name not in bridge.tools:
+                            all_supported = False
+                            break
+                            
+                    if not all_supported:
+                        logger.info("Some tool calls are not supported locally in auto mode. Returning to client platform.")
+                        break
+                    
+                iterations += 1
+                logger.info(f"ReAct Loop: Iteration {iterations} executing tool calls: {calls}")
+                
+                results = []
+                for call in calls:
+                    call_dict = {
+                        "name": call.function.name,
+                        "arguments": json.loads(call.function.arguments) if isinstance(call.function.arguments, str) else call.function.arguments
+                    }
+                    res = bridge.execute_call(call_dict)
+                    results.append(res)
+                    
+                tool_result_str = "\n".join(
+                    f"Tool result [{call.function.name}]: {json.dumps(res, ensure_ascii=False)}"
+                    for call, res in zip(calls, results)
+                )
+                
+                additional_context = list(additional_context)
+                assistant_transcript = f"Assistant (tool call):\n{self._redact_tool_sentinels(text)}"
+                additional_context.append(assistant_transcript)
+                additional_context.append(f"Tool results:\n{tool_result_str}")
+                
+                text = await client.chat(prompt, additional_context, session, tone)
+                calls = self.parse_response(
+                    text, normalized_tools, workspace_root=workspace_root
+                )
+
+            if calls:
+                return calls, self._redact_tool_sentinels(text)
+            else:
+                return None, self._redact_tool_sentinels(text)
+        else:
+            return calls, self._redact_tool_sentinels(text)

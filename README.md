@@ -52,7 +52,7 @@ The server starts at:
 http://127.0.0.1:8000
 ```
 
-On first run, the proxy opens a dedicated Browser window. Sign in to M365 Copilot there once. The proxy will capture the required Substrate token and write it to `.env`.
+On first run, the proxy opens a dedicated Browser window. Sign in to M365 Copilot there once. The proxy will capture the required Substrate token and write it to `config.ini`.
 
 The dedicated browser profile is stored at:
 
@@ -298,12 +298,12 @@ Claude Code then routes its requests through the proxy (using the tool middlewar
 
 ## Persistent Sessions
 
-By default (`M365_PERSIST_DEFAULT=true`), the proxy maps **each client chat to one Copilot conversation** and keeps that mapping in SQLite. Substrate retains the thread under a reused conversation id, so after the first turn the proxy stops re-sending the prior transcript.
+By default (`persist_default = true` in `config.ini`), the proxy maps **each client chat to one Copilot conversation** and keeps that mapping in SQLite. Substrate retains the thread under a reused conversation id, so after the first turn the proxy stops re-sending the prior transcript.
 
 How the mapping key is chosen, in order of precedence:
 
 1. `X-M365-Session-Id` header — an explicit, stable id you control (best when your client supports custom headers).
-2. `M365_SESSION` environment variable — a process-level stable id for clients that cannot set custom headers; when set, temporary chat is disabled so the session can use Copilot history/memory.
+2. `session_id` in `config.ini` — a process-level stable id for clients that cannot set custom headers; when set, temporary chat is disabled so the session can use Copilot history/memory.
 3. `m365-...:persist` **plus** the OpenAI `user` field — one shared session per user.
 4. Otherwise — an automatic per-chat fingerprint (project + first real user message), so distinct chats get distinct conversations.
 
@@ -353,7 +353,7 @@ Then paste a fresh Substrate WebSocket URL:
 5. Go to **Headers** -> right-click the **Request URL** -> **Copy link address**.
 6. Paste it into the terminal.
 
-The command extracts `access_token` automatically and writes it to `.env`.
+The command extracts `access_token` automatically and writes it to `config.ini`.
 
 ## Token Health
 
@@ -396,7 +396,7 @@ Example:
 
 Microsoft 365 Copilot returns plain text and has no native function calling. To let agentic clients work, the proxy routes OpenAI and Anthropic tool definitions through a protocol-neutral middleware layer. The default `emulation` backend injects the client's tool schemas into the prompt (with a strict sentinel-delimited output contract) and parses the model's reply back into OpenAI `tool_calls` / Anthropic `tool_use`. This is best-effort: the model may ignore the format, so the proxy verifies and asks for a correction. Send your tools as usual on `/v1/chat/completions`, `/v1/responses`, or `/v1/messages`.
 
-The middleware has an explicit native backend seam for future real tool execution. `M365_TOOL_MIDDLEWARE_MODE=native` is intentionally separate from emulation and does not grant arbitrary local execution by itself. See [docs/TOOL_MIDDLEWARE.md](docs/TOOL_MIDDLEWARE.md) for modes, internal models, security boundaries, and unsupported areas.
+The middleware has an explicit native backend seam for future real tool execution. `tool_middleware_mode=native` (in `config.ini`) is intentionally separate from emulation and does not grant arbitrary local execution by itself. See [docs/TOOL_MIDDLEWARE.md](docs/TOOL_MIDDLEWARE.md) for modes, internal models, security boundaries, and unsupported areas.
 
 ### Vision
 
@@ -404,7 +404,7 @@ Send images the normal OpenAI way — an `image_url` content part with a `data:`
 
 ### Session management
 
-Each client chat maps to one Copilot conversation. The mapping key is, in order of precedence: the `X-M365-Session-Id` header, then the `M365_SESSION` environment variable, then `:persist` + the OpenAI `user` field, then an automatic per-chat fingerprint. Mappings are persisted in SQLite so chats survive a proxy restart, and can be listed / relabelled / rotated / deleted via the `/v1/chats` endpoints above.
+Each client chat maps to one Copilot conversation. The mapping key is, in order of precedence: the `X-M365-Session-Id` header, then the `session_id` config value in `config.ini`, then `:persist` + the OpenAI `user` field, then an automatic per-chat fingerprint. Mappings are persisted in SQLite so chats survive a proxy restart, and can be listed / relabelled / rotated / deleted via the `/v1/chats` endpoints above.
 
 ## More Examples
 
@@ -463,35 +463,17 @@ $r.content[0].text
 ## Security Notes
 
 - The proxy listens on `127.0.0.1` by default.
-- The browser token is stored locally in `.env`.
-- `.env`, `.venv/`, Python cache files, `*.har` captures, and `debug.log` are ignored by Git. HAR captures and debug logs can contain tokens, cookies, and tenant data — never commit them.
+- The browser token is stored locally in `config.ini`.
+- `config.ini`, `.venv/`, Python cache files, `*.har` captures, and `debug.log` are ignored by Git. HAR captures and debug logs can contain tokens, cookies, and tenant data — never commit them.
 - The proxy does not send your token to any external service besides Microsoft 365 Copilot's own `substrate.office.com` endpoint.
-- Anyone who can read your `.env` can use the token until it expires. Treat it like a secret.
-- Temporary chats (`M365_DISABLE_MEMORY=true`, default) keep proxy traffic out of your Copilot history, but the requests still hit Microsoft's servers — this is normal Copilot use, not anonymisation.
+- Anyone who can read your `config.ini` can use the token until it expires. Treat it like a secret.
+- Temporary chats (`disable_memory = true` in `config.ini`, default) keep proxy traffic out of your Copilot history, but the requests still hit Microsoft's servers — this is normal Copilot use, not anonymisation.
 
-## Environment Variables
+## Configuration
 
-Most users only need `.env` after the proxy captures a token.
+All configuration is done via `config.ini` in the current working directory or the project root.
 
-| Variable | Default | Description |
-|---|---|---|
-| `M365_ACCESS_TOKEN` | optional at startup | Browser WebSocket token. If missing, startup capture can fill `.env`. |
-| `M365_TIME_ZONE` | `Asia/Tokyo` | Time zone sent to Copilot. |
-| `M365_MODEL_ALIAS` | `m365-copilot` | Model name returned as the alias by `/v1/models`. |
-| `M365_WORK_GROUNDING` | `true` | `true` = Work grounding (enterprise data); `false` = Web only. Coding agents usually want `false`. |
-| `M365_PERSIST_DEFAULT` | `true` | Auto-map each client chat to one Copilot conversation. |
-| `M365_DISABLE_MEMORY` | `true` | Open every conversation as a temporary chat (`disableMemory=1`): no history, no memories. Ignored when `M365_SESSION` is set, because fixed sessions require memory/history. |
-| `M365_SESSION` | empty | Process-level persistent session id used when `X-M365-Session-Id` is not supplied; also disables temporary chat so memory/history can attach to that session. |
-| `M365_SESSION_DB` | `~/.m365-copilot-openai-proxy/sessions.db` | SQLite file for the conversation store. |
-| `M365_SESSION_SALT` | random per process | Salt for the auto conversation fingerprint. Set it to keep keys stable across restarts. |
-| `M365_RECV_TIMEOUT` | `90` | Seconds to wait for a substrate frame before giving up. |
-| `M365_OPEN_TIMEOUT` | `30` | WebSocket handshake timeout (seconds). |
-| `M365_EDGE_PATH` | Browser default path | Browser executable used for the debug token-capture window. |
-| `M365_DEBUG` | unset | When set, writes request/response diagnostics to `debug.log`. |
-| `M365_TOOL_MIDDLEWARE_ENABLED` | `true` | Enables the protocol-neutral tool middleware facade. Set `false` to bypass middleware without changing legacy emulation settings. |
-| `M365_TOOL_MIDDLEWARE_MODE` | `emulation` | Tool middleware mode: `off`, `emulation`, `native`, or `auto`. `emulation` preserves current behavior; `native` is a separate backend seam; `auto` prefers native only when a configured backend can execute. |
-| `M365_TOOL_EMULATION_ENABLED` | `true` | Enables the prompt/sentinel emulation backend used by default middleware mode. |
-| `M365_TOOL_EMULATION_FORCE_NON_STREAMING` | `true` | Forces a non-streaming upstream turn while emulating tool calls, then wraps the result back into the requested streaming shape when needed. |
+For a comprehensive guide to all configuration sections, variables, and usage details, please see [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
 
 ## Limitations
 

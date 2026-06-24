@@ -29,18 +29,25 @@ def _free_port() -> int:
 
 
 def _read_token(repo_root: Path) -> str:
-    env_token = os.environ.get("M365_ACCESS_TOKEN", "").strip()
-    if env_token:
-        return env_token
+    config_file = repo_root / "config.ini"
+    if config_file.exists():
+        try:
+            import configparser
+            parser = configparser.ConfigParser()
+            parser.read(config_file, encoding="utf-8")
+            if parser.has_section("settings") and parser.has_option("settings", "access_token"):
+                val = parser.get("settings", "access_token").strip().strip('"').strip("'")
+                if val:
+                    return val
+        except Exception:
+            pass
 
     env_file = repo_root / ".env"
-    if not env_file.exists():
-        return ""
-    for line in env_file.read_text(encoding="utf-8", errors="ignore").splitlines():
-        if not line.startswith("M365_ACCESS_TOKEN="):
-            continue
-        value = line.split("=", 1)[1].strip().strip('"').strip("'")
-        return value
+    if env_file.exists():
+        for line in env_file.read_text(encoding="utf-8", errors="ignore").splitlines():
+            if line.startswith("access_token="):
+                return line.split("=", 1)[1].strip().strip('"').strip("'")
+
     return ""
 
 
@@ -123,8 +130,8 @@ def test_opencode_path_safety_and_normalization() -> None:
     2. Rejects and filters out any paths that try to escape/access files outside the workspace.
     """
     settings = Settings(
-        M365_ACCESS_TOKEN="fake",
-        M365_TOOL_EMULATION_ENABLED=True,
+        access_token="fake",
+        tool_emulation_enabled=True,
     )
     pipeline = ToolEmulationPipeline(settings)
 
@@ -169,8 +176,8 @@ def test_tool_emulation_preserves_unrelated_path_parameters() -> None:
     that have a 'path' parameter but are NOT file tools (e.g., webfetch with URL path).
     """
     settings = Settings(
-        M365_ACCESS_TOKEN="fake",
-        M365_TOOL_EMULATION_ENABLED=True,
+        access_token="fake",
+        tool_emulation_enabled=True,
     )
     pipeline = ToolEmulationPipeline(settings)
 
@@ -203,8 +210,8 @@ def test_tool_emulation_preserves_api_path_parameter() -> None:
     must NOT have that path normalized to a filesystem path.
     """
     settings = Settings(
-        M365_ACCESS_TOKEN="fake",
-        M365_TOOL_EMULATION_ENABLED=True,
+        access_token="fake",
+        tool_emulation_enabled=True,
     )
     pipeline = ToolEmulationPipeline(settings)
 
@@ -238,8 +245,8 @@ def test_tool_emulation_preserves_api_filePath_parameter() -> None:
     must NOT have that path normalized if it's not a known file tool.
     """
     settings = Settings(
-        M365_ACCESS_TOKEN="fake",
-        M365_TOOL_EMULATION_ENABLED=True,
+        access_token="fake",
+        tool_emulation_enabled=True,
     )
     pipeline = ToolEmulationPipeline(settings)
 
@@ -275,8 +282,8 @@ def test_tool_emulation_normalizes_path_parameter_for_file_tools() -> None:
     Verify that 'path' parameter (not just 'filePath') is normalized for file tools.
     """
     settings = Settings(
-        M365_ACCESS_TOKEN="fake",
-        M365_TOOL_EMULATION_ENABLED=True,
+        access_token="fake",
+        tool_emulation_enabled=True,
     )
     pipeline = ToolEmulationPipeline(settings)
 
@@ -304,8 +311,8 @@ def test_tool_emulation_rejects_path_traversal() -> None:
     Verify that path traversal attempts are rejected.
     """
     settings = Settings(
-        M365_ACCESS_TOKEN="fake",
-        M365_TOOL_EMULATION_ENABLED=True,
+        access_token="fake",
+        tool_emulation_enabled=True,
     )
     pipeline = ToolEmulationPipeline(settings)
 
@@ -380,16 +387,18 @@ def test_opencode_real_file_read_integration(tmp_path: Path) -> None:
     runtime_dir = tmp_path / "runtime"
     runtime_dir.mkdir(parents=True, exist_ok=True)
     db_file = tmp_path / "sessions.db"
-    (runtime_dir / ".env").write_text(
+    (runtime_dir / "config.ini").write_text(
         "\n".join(
             [
-                f"M365_ACCESS_TOKEN={token}",
-                "M365_PERSIST_DEFAULT=false",
-                "M365_DISABLE_MEMORY=true",
-                "M365_WORK_GROUNDING=false",
-                "M365_TOOL_EMULATION_EXCLUDE_TOOLS=bash",
-                f"M365_SESSION_DB={db_file}",
-                "M365_DEBUG=1",
+                "[settings]",
+                f"access_token = {token}",
+                "persist_default = false",
+                "disable_memory = true",
+                "work_grounding = false",
+                f"session_db_path = {str(db_file.as_posix())}",
+                "debug = true",
+                "[tool_emulation]",
+                "exclude_tools = bash",
             ]
         )
         + "\n",
@@ -421,13 +430,6 @@ def test_opencode_real_file_read_integration(tmp_path: Path) -> None:
             "--no-configure-clients",
         ]
         server_env = os.environ.copy()
-        server_env["M365_ACCESS_TOKEN"] = token
-        server_env["M365_PERSIST_DEFAULT"] = "false"
-        server_env["M365_DISABLE_MEMORY"] = "true"
-        server_env["M365_WORK_GROUNDING"] = "false"
-        server_env["M365_TOOL_EMULATION_EXCLUDE_TOOLS"] = "bash"
-        server_env["M365_SESSION_DB"] = str(db_file)
-        server_env["M365_DEBUG"] = "1"
 
         server_proc = subprocess.Popen(
             server_cmd,
@@ -611,16 +613,18 @@ def test_opencode_rejects_path_traversal(tmp_path: Path) -> None:
     runtime_dir = tmp_path / "runtime"
     runtime_dir.mkdir(parents=True, exist_ok=True)
     db_file = tmp_path / "sessions.db"
-    (runtime_dir / ".env").write_text(
+    (runtime_dir / "config.ini").write_text(
         "\n".join(
             [
-                f"M365_ACCESS_TOKEN={token}",
-                "M365_PERSIST_DEFAULT=false",
-                "M365_DISABLE_MEMORY=true",
-                "M365_WORK_GROUNDING=false",
-                "M365_TOOL_EMULATION_EXCLUDE_TOOLS=bash",
-                f"M365_SESSION_DB={db_file}",
-                "M365_DEBUG=1",
+                "[settings]",
+                f"access_token = {token}",
+                "persist_default = false",
+                "disable_memory = true",
+                "work_grounding = false",
+                f"session_db_path = {str(db_file.as_posix())}",
+                "debug = true",
+                "[tool_emulation]",
+                "exclude_tools = bash",
             ]
         )
         + "\n",
@@ -652,12 +656,6 @@ def test_opencode_rejects_path_traversal(tmp_path: Path) -> None:
             "--no-configure-clients",
         ]
         server_env = os.environ.copy()
-        server_env["M365_ACCESS_TOKEN"] = token
-        server_env["M365_PERSIST_DEFAULT"] = "false"
-        server_env["M365_DISABLE_MEMORY"] = "true"
-        server_env["M365_WORK_GROUNDING"] = "false"
-        server_env["M365_SESSION_DB"] = str(db_file)
-        server_env["M365_DEBUG"] = "1"
 
         server_proc = subprocess.Popen(
             server_cmd,
@@ -767,16 +765,18 @@ def test_opencode_tool_result_propagation(tmp_path: Path) -> None:
     runtime_dir = tmp_path / "runtime"
     runtime_dir.mkdir(parents=True, exist_ok=True)
     db_file = tmp_path / "sessions.db"
-    (runtime_dir / ".env").write_text(
+    (runtime_dir / "config.ini").write_text(
         "\n".join(
             [
-                f"M365_ACCESS_TOKEN={token}",
-                "M365_PERSIST_DEFAULT=false",
-                "M365_DISABLE_MEMORY=true",
-                "M365_WORK_GROUNDING=false",
-                "M365_TOOL_EMULATION_EXCLUDE_TOOLS=bash",
-                f"M365_SESSION_DB={db_file}",
-                "M365_DEBUG=1",
+                "[settings]",
+                f"access_token = {token}",
+                "persist_default = false",
+                "disable_memory = true",
+                "work_grounding = false",
+                f"session_db_path = {str(db_file.as_posix())}",
+                "debug = true",
+                "[tool_emulation]",
+                "exclude_tools = bash",
             ]
         )
         + "\n",
@@ -808,12 +808,6 @@ def test_opencode_tool_result_propagation(tmp_path: Path) -> None:
             "--no-configure-clients",
         ]
         server_env = os.environ.copy()
-        server_env["M365_ACCESS_TOKEN"] = token
-        server_env["M365_PERSIST_DEFAULT"] = "false"
-        server_env["M365_DISABLE_MEMORY"] = "true"
-        server_env["M365_WORK_GROUNDING"] = "false"
-        server_env["M365_SESSION_DB"] = str(db_file)
-        server_env["M365_DEBUG"] = "1"
 
         server_proc = subprocess.Popen(
             server_cmd,

@@ -32,8 +32,8 @@ _END = "<<<END_TOOL_CALLS>>>"
 @pytest.fixture
 def settings() -> Settings:
     return Settings(
-        M365_ACCESS_TOKEN="fake",
-        M365_TOOL_EMULATION_ENABLED=True,
+        access_token="fake",
+        tool_emulation_enabled=True,
     )
 
 
@@ -183,14 +183,14 @@ def test_empty_text_returns_none(pipeline, weather_tools) -> None:
 
 
 def test_redact_strips_complete_block() -> None:
-    pipeline = ToolEmulationPipeline(Settings(M365_ACCESS_TOKEN="fake"))
+    pipeline = ToolEmulationPipeline(Settings(access_token="fake"))
     text = f"prefix {_BEGIN}\n[{json.dumps([{'name': 'x'}])}]\n{_END} suffix"
     assert _BEGIN not in pipeline._redact_tool_sentinels(text)
     assert _END not in pipeline._redact_tool_sentinels(text)
 
 
 def test_redact_strips_dangling_sentinels() -> None:
-    pipeline = ToolEmulationPipeline(Settings(M365_ACCESS_TOKEN="fake"))
+    pipeline = ToolEmulationPipeline(Settings(access_token="fake"))
     # No matching END here -> the block regex leaves the open marker behind,
     # which the per-marker scrub must then remove.
     text = f"I will use {_BEGIN} for this."
@@ -201,7 +201,7 @@ def test_redact_strips_dangling_sentinels() -> None:
 
 
 def test_redact_preserves_clean_text() -> None:
-    pipeline = ToolEmulationPipeline(Settings(M365_ACCESS_TOKEN="fake"))
+    pipeline = ToolEmulationPipeline(Settings(access_token="fake"))
     text = "Just a normal assistant reply with no markers."
     assert pipeline._redact_tool_sentinels(text) == text
 

@@ -1,0 +1,120 @@
+[settings]
+# Microsoft 365 Copilot Substrate access token
+access_token = 
+
+# Time zone used by the proxy (default: Asia/Tokyo)
+time_zone = Asia/Tokyo
+
+# OpenAI model alias to map to Copilot (default: m365-copilot)
+model_alias = m365-copilot
+
+# True -> enterprise grounding; False -> web grounding
+work_grounding = true
+
+# Keep one substrate conversation per client chat
+persist_default = true
+
+# Use temporary/private chats (no memory/history saved to Copilot)
+disable_memory = true
+
+# SQLite database path for session/conversation store (empty -> default home dir)
+session_db_path = 
+
+# Cap on stored conversations (0 -> no cap)
+session_max = 1000
+
+# Evict conversations unused for this many seconds (0 -> no TTL)
+session_ttl_seconds = 0
+
+# Handshake and socket timeouts (in seconds)
+recv_timeout = 90
+open_timeout = 30
+
+# Debug and timing options
+debug = false
+timing = false
+
+# Path overrides
+substrate_config_path = 
+prompt_catalog_path = 
+tool_emulation_injection_path = 
+
+# Browser settings
+edge_headless = false
+edge_path = C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe
+
+# OAuth / Auth state (automatically populated/refreshed)
+refresh_token = 
+tenant_id = 
+client_id = 
+session_id = 
+session_salt = 
+
+# Keep WebSocket alive per persistent session
+ws_reuse = false
+
+# Automatically close capture window on success
+hide_on_token_success = true
+
+# Anthropic Passthrough settings
+anthropic_passthrough = false
+anthropic_upstream = https://api.anthropic.com
+anthropic_version = 2023-06-01
+anthropic_creds_file = 
+anthropic_key = 
+
+[serve]
+host = 127.0.0.1
+port = 8000
+cdp_port = 9222
+auto_refresh = true
+launch_edge = true
+capture_on_start = true
+capture_timeout_seconds = 180
+refresh_before_seconds = 900
+refresh_retry_seconds = 60
+configure_clients = true
+
+[capture_token]
+cdp_port = 9222
+timeout_seconds = 60
+
+[launch_edge]
+cdp_port = 9222
+
+[configure]
+undo = false
+
+[tool_middleware]
+enabled = false
+mode = emulation
+plugin_paths = 
+
+[tool_emulation]
+enabled = false
+run_mode = auto
+exclude_tools = 
+emulate_when_capability_unknown = true
+native_passthrough = true
+mode = response_only
+prompt_template_version = v1
+max_tools_in_prompt = 8
+max_tool_schema_chars = 12000
+max_single_tool_schema_chars = 3000
+compact_schema = true
+cache_rendered_tool_prompts = true
+force_non_streaming = true
+override_temperature = false
+default_temperature = 0.0
+parser_mode = delimiter_first
+allow_plain_json = true
+allow_markdown_json_recovery = true
+allow_loose_json_recovery = false
+max_parse_chars = 20000
+validate_schema = true
+repair_invalid_tool_call_once = true
+max_agent_iterations = 1
+max_total_tool_calls = 3
+prevent_repeated_tool_calls = true
+execution_enabled = false
+execution_sandbox = true

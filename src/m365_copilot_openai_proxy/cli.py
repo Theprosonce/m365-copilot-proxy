@@ -23,6 +23,7 @@ import uvicorn
 import websockets
 
 from .app import create_app
+from .config import Settings, read_config_value, write_config_value, read_config_value, write_config_value, read_config_value, write_config_value, read_config_value, write_config_value, read_config_value, write_config_value
 from .token_store import decode_jwt_payload, is_substrate_token_claims
 
 
@@ -231,9 +232,9 @@ async def _cdp_close_browser(port: int) -> None:
 
 
 def _close_debug_browser(port: int) -> None:
-    hide_val = os.environ.get("M365_HIDE_ON_TOKEN_SUCCESS")
+    hide_val = read_config_value("hide_on_token_success")
     if hide_val is None:
-        hide_val = _read_env_value("M365_HIDE_ON_TOKEN_SUCCESS")
+        hide_val = read_config_value("hide_on_token_success")
     if hide_val is None:
         hide = True
     else:
@@ -261,7 +262,7 @@ def _startup_capture_loop(cdp_port: int, timeout_seconds: int) -> None:
         "If needed: press F5 in Copilot, click the message box, and type one character."
     )
     if _capture_token_to_env(cdp_port, timeout_seconds):
-        print(".env updated with Substrate token.")
+        print("config.ini updated with Substrate token.")
         _close_debug_browser(cdp_port)
     else:
         print("Startup token capture timed out. Manual set-token is still available.")
@@ -414,9 +415,9 @@ def _mint_substrate(
 
 
 def _foci_refresh_from_env() -> bool:
-    rt = _read_env_value("M365_REFRESH_TOKEN")
-    tenant = _read_env_value("M365_TENANT_ID")
-    client_id = _read_env_value("M365_CLIENT_ID")
+    rt = read_config_value("refresh_token")
+    tenant = read_config_value("tenant_id")
+    client_id = read_config_value("client_id")
     if not (rt and tenant and client_id):
         return False
     minted = _mint_substrate(rt, tenant, client_id)
@@ -425,7 +426,7 @@ def _foci_refresh_from_env() -> bool:
     access, new_rt = minted
     _write_token(access)
     if new_rt and new_rt != rt:
-        _write_env_value("M365_REFRESH_TOKEN", new_rt)  # rotate
+        write_config_value("refresh_token", new_rt)  # rotate
     return True
 
 
@@ -439,9 +440,9 @@ def _capture_refresh_token_via_cdp(cdp_port: int) -> bool:
     tenant = sub.get("realm") or data["rt"].get("realm")
     if not (rt and client_id and tenant):
         return False
-    _write_env_value("M365_REFRESH_TOKEN", rt)
-    _write_env_value("M365_TENANT_ID", tenant)
-    _write_env_value("M365_CLIENT_ID", client_id)
+    write_config_value("refresh_token", rt)
+    write_config_value("tenant_id", tenant)
+    write_config_value("client_id", client_id)
     print(
         "Captured MSAL refresh token; minting substrate token via HTTP (no browser needed from now on)."
     )
@@ -469,12 +470,7 @@ def _try_auto_refresh(cdp_port: int, *, allow_nudge: bool = True) -> bool:
 
 
 def _read_token() -> str | None:
-    env_path = Path(".env")
-    if not env_path.exists():
-        return None
-    text = env_path.read_text(encoding="utf-8")
-    match = re.search(r"(?m)^M365_ACCESS_TOKEN=(.*)$", text)
-    return match.group(1).strip().strip("\"'") if match else None
+    return Settings().access_token or None
 
 
 def _seconds_remaining(token: str) -> int:
@@ -513,37 +509,20 @@ def _auto_refresh_loop(
 
 
 def _write_token(token: str) -> None:
-    _write_env_value("M365_ACCESS_TOKEN", token)
+    write_config_value("access_token", token)
 
 
 def _write_env_value(key: str, value: str) -> None:
-    env_path = Path(".env")
-    pattern = rf"(?m)^{re.escape(key)}=.*$"
-    if env_path.exists():
-        text = env_path.read_text(encoding="utf-8")
-        if re.search(pattern, text):
-            text = re.sub(pattern, f"{key}={value}", text)
-        else:
-            text += (
-                "" if text.endswith("\n") or not text else "\n"
-            ) + f"{key}={value}\n"
-    else:
-        text = f"{key}={value}\n"
-    env_path.write_text(text, encoding="utf-8")
+    write_config_value(key, value)
 
 
 def _read_env_value(key: str) -> str | None:
-    env_path = Path(".env")
-    if not env_path.exists():
-        return None
-    match = re.search(
-        rf"(?m)^{re.escape(key)}=(.*)$", env_path.read_text(encoding="utf-8")
-    )
-    return match.group(1).strip().strip("\"'") if match else None
+    return read_config_value(key)
 
 
 def main() -> None:
     _attach_parent_console()
+    settings = Settings()
     parser = argparse.ArgumentParser(
         prog="copilot-openai-proxy",
         description="M365 Copilot <-> OpenAI/Anthropic proxy. Bare invocation defaults to 'serve'.",
@@ -552,7 +531,7 @@ def main() -> None:
     subparsers = parser.add_subparsers(dest="command", required=False)
 
     subparsers.add_parser(
-        "set-token", help="paste a substrate access token or WebSocket URL into .env"
+        "set-token", help="paste a substrate access token or WebSocket URL into config.ini"
     ).set_defaults(func=set_token_command)
     capture_parser = subparsers.add_parser(
         "capture-token", help="listen for a substrate token via Edge CDP"
@@ -560,14 +539,14 @@ def main() -> None:
     capture_parser.add_argument(
         "--cdp-port",
         type=int,
-        default=9222,
-        help="Edge remote-debugging port (default: 9222)",
+        default=settings.capture_token_cdp_port,
+        help=f"Edge remote-debugging port (default: {settings.capture_token_cdp_port})",
     )
     capture_parser.add_argument(
         "--timeout-seconds",
         type=int,
-        default=60,
-        help="give up after this many seconds (default: 60)",
+        default=settings.capture_token_timeout_seconds,
+        help=f"give up after this many seconds (default: {settings.capture_token_timeout_seconds})",
     )
     capture_parser.set_defaults(func=capture_token_command)
 
@@ -577,8 +556,8 @@ def main() -> None:
     launch_parser.add_argument(
         "--cdp-port",
         type=int,
-        default=9222,
-        help="Edge remote-debugging port (default: 9222)",
+        default=settings.launch_edge_cdp_port,
+        help=f"Edge remote-debugging port (default: {settings.launch_edge_cdp_port})",
     )
     launch_parser.set_defaults(func=launch_edge_command)
 
@@ -586,52 +565,67 @@ def main() -> None:
         "serve", help="start the proxy server (default when no command is given)"
     )
     serve_parser.add_argument(
-        "--host", default="127.0.0.1", help="listen address (default: 127.0.0.1)"
+        "--host",
+        default=settings.serve_host,
+        help=f"listen address (default: {settings.serve_host})",
     )
     serve_parser.add_argument(
-        "--port", type=int, default=8000, help="listen port (default: 8000)"
+        "--port",
+        type=int,
+        default=settings.serve_port,
+        help=f"listen port (default: {settings.serve_port})",
     )
     serve_parser.add_argument(
         "--cdp-port",
         type=int,
-        default=9222,
-        help="Edge remote-debugging port (default: 9222)",
+        default=settings.serve_cdp_port,
+        help=f"Edge remote-debugging port (default: {settings.serve_cdp_port})",
     )
     serve_parser.add_argument(
-        "--no-auto-refresh", action="store_true", help="disable automatic token refresh"
+        "--auto-refresh",
+        dest="auto_refresh",
+        action=argparse.BooleanOptionalAction,
+        default=settings.serve_auto_refresh,
+        help=f"enable automatic token refresh (default: {settings.serve_auto_refresh})",
     )
     serve_parser.add_argument(
-        "--no-launch-edge",
-        action="store_true",
-        help="don't open a debug Edge window on start",
+        "--launch-edge",
+        dest="launch_edge",
+        action=argparse.BooleanOptionalAction,
+        default=settings.serve_launch_edge,
+        help=f"open a debug Edge window on start (default: {settings.serve_launch_edge})",
     )
     serve_parser.add_argument(
-        "--no-capture-on-start",
-        action="store_true",
-        help="don't capture a token at startup",
+        "--capture-on-start",
+        dest="capture_on_start",
+        action=argparse.BooleanOptionalAction,
+        default=settings.serve_capture_on_start,
+        help=f"capture a token at startup (default: {settings.serve_capture_on_start})",
     )
     serve_parser.add_argument(
         "--capture-timeout-seconds",
         type=int,
-        default=180,
-        help="startup token-capture timeout (default: 180)",
+        default=settings.serve_capture_timeout_seconds,
+        help=f"startup token-capture timeout (default: {settings.serve_capture_timeout_seconds})",
     )
     serve_parser.add_argument(
         "--refresh-before-seconds",
         type=int,
-        default=int(os.environ.get("M365_REFRESH_BEFORE", "900")),
-        help="refresh the token this many seconds before expiry (default: 900 / env M365_REFRESH_BEFORE)",
+        default=settings.serve_refresh_before_seconds,
+        help=f"refresh the token this many seconds before expiry (default: {settings.serve_refresh_before_seconds})",
     )
     serve_parser.add_argument(
         "--refresh-retry-seconds",
         type=int,
-        default=60,
-        help="wait between refresh retries (default: 60)",
+        default=settings.serve_refresh_retry_seconds,
+        help=f"wait between refresh retries (default: {settings.serve_refresh_retry_seconds})",
     )
     serve_parser.add_argument(
-        "--no-configure-clients",
-        action="store_true",
-        help="don't wire Claude Code/VS Code to the proxy on start (and don't undo on stop)",
+        "--configure-clients",
+        dest="configure_clients",
+        action=argparse.BooleanOptionalAction,
+        default=settings.serve_configure_clients,
+        help=f"wire Claude Code/VS Code to the proxy on start (default: {settings.serve_configure_clients})",
     )
     serve_parser.set_defaults(func=serve_command)
 
@@ -642,7 +636,8 @@ def main() -> None:
     configure_parser.add_argument(
         "--undo",
         action="store_true",
-        help="remove the proxy wiring instead of adding it",
+        default=settings.configure_undo,
+        help=f"remove the proxy wiring instead of adding it (default: {settings.configure_undo})",
     )
     configure_parser.set_defaults(func=configure_command)
 
@@ -682,8 +677,8 @@ _LINUX_BROWSER_PRIORITY = (
 
 
 def _resolve_debug_browser_path() -> str:
-    configured = _read_env_value("M365_EDGE_PATH")
-    if configured:
+    configured = Settings().edge_path
+    if configured and (os.name == "nt" or configured != _DEFAULT_EDGE_PATH):
         return configured
     if os.name == "nt":
         return _DEFAULT_EDGE_PATH
@@ -692,7 +687,25 @@ def _resolve_debug_browser_path() -> str:
             resolved = shutil.which(candidate)
             if resolved:
                 return resolved
-    return _DEFAULT_EDGE_PATH
+    elif sys.platform.startswith("darwin"):
+        _MACOS_BROWSER_PRIORITY = (
+            "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            "/Applications/Chromium.app/Contents/MacOS/Chromium",
+        )
+        for candidate in _MACOS_BROWSER_PRIORITY:
+            if Path(candidate).exists():
+                return candidate
+        for candidate in ("microsoft-edge", "google-chrome", "chromium"):
+            resolved = shutil.which(candidate)
+            if resolved:
+                return resolved
+
+    raise RuntimeError(
+        "Could not automatically locate a Chromium-based browser (Edge, Chrome, Chromium) on your system.\n"
+        "Please install Microsoft Edge or Google Chrome, or configure the 'edge_path' setting in your 'config.ini' "
+        "with the absolute path to your browser executable."
+    )
 
 
 def _debug_browser_profile_dir(browser_path: str) -> Path:
@@ -753,12 +766,7 @@ def _launch_debug_edge(cdp_port: int) -> None:
         f"--user-data-dir={profile_dir}",
         "--no-first-run",
     ]
-    headless = (os.environ.get("M365_EDGE_HEADLESS") or "").strip().lower() in (
-        "1",
-        "true",
-        "yes",
-        "on",
-    )
+    headless = Settings().edge_headless
     if headless:
         # Invisible refresh — works only if the profile is already signed in and the tenant
         # does not require interactive WAM re-auth. First sign-in must be done non-headless.
@@ -795,7 +803,7 @@ def set_token_command(_args) -> None:
         )
         return
     _write_token(token)
-    print(".env updated.")
+    print("config.ini updated.")
 
 
 def capture_token_command(args: argparse.Namespace) -> None:
@@ -810,7 +818,7 @@ def capture_token_command(args: argparse.Namespace) -> None:
         print("Error: no Substrate WebSocket token captured before timeout.")
         return
     _write_token(token)
-    print(".env updated with Substrate token.")
+    print("config.ini updated with Substrate token.")
     _close_debug_browser(args.cdp_port)
 
 
@@ -960,7 +968,7 @@ def _attach_parent_console() -> None:
 
 def serve_command(args: argparse.Namespace) -> None:
     base_url = f"http://{args.host}:{args.port}"
-    wire = not getattr(args, "no_configure_clients", False)
+    wire = bool(getattr(args, "configure_clients", True))
     if wire:
         _configure_clients(undo=False, base_url=base_url)
     try:
@@ -982,19 +990,19 @@ def _run_server(args: argparse.Namespace) -> None:
         auto_refresh_thread = None
         capture_thread = None
 
-        if not args.no_launch_edge:
+        if args.launch_edge:
             _launch_debug_edge(cdp_port)
 
         thread = threading.Thread(target=server.run, daemon=True)
         thread.start()
-        if not args.no_capture_on_start and _needs_substrate_token(_read_token()):
+        if args.capture_on_start and _needs_substrate_token(_read_token()):
             capture_thread = threading.Thread(
                 target=_startup_capture_loop,
                 args=(cdp_port, args.capture_timeout_seconds),
                 daemon=True,
             )
             capture_thread.start()
-        if not args.no_auto_refresh:
+        if args.auto_refresh:
             auto_refresh_thread = threading.Thread(
                 target=_auto_refresh_loop,
                 args=(
@@ -1009,8 +1017,8 @@ def _run_server(args: argparse.Namespace) -> None:
 
         while not server.started and thread.is_alive():
             time.sleep(0.05)
-        auto_refresh_label = "off" if args.no_auto_refresh else "on"
-        capture_label = "off" if args.no_capture_on_start else "on"
+        auto_refresh_label = "on" if args.auto_refresh else "off"
+        capture_label = "on" if args.capture_on_start else "off"
         print(
             f"\n  [q] quit    [r] refresh token"
             f"    auto-refresh: {auto_refresh_label}"

@@ -100,7 +100,7 @@ def test_openai_compatible_accepts_anthropic_shaped_tool_schema() -> None:
 
 
 def test_prompt_renders_mixed_openai_and_anthropic_compatible_tools() -> None:
-    pipeline = ToolMiddlewarePipeline(Settings(M365_ACCESS_TOKEN="fake"))
+    pipeline = ToolMiddlewarePipeline(Settings(access_token="fake"))
     request = OpenAIChatRequest(
         model="m365-opus",
         messages=[OpenAIMessage(role="user", content="inspect files")],
@@ -137,8 +137,34 @@ def test_prompt_renders_mixed_openai_and_anthropic_compatible_tools() -> None:
     assert "Read(file_path:string)" in (prompt or "")
 
 
+def test_prompt_lists_all_non_excluded_tools() -> None:
+    pipeline = ToolMiddlewarePipeline(
+        Settings(
+            access_token="fake",
+            tool_emulation_exclude_tools="SkipMe",
+            tool_emulation_max_tools_in_prompt=1,
+        )
+    )
+    request = OpenAIChatRequest(
+        model="m365-opus",
+        messages=[OpenAIMessage(role="user", content="use tools")],
+        tools=[
+            {"name": "KeepOne", "description": "First tool", "input_schema": {"type": "object"}},
+            {"name": "SkipMe", "description": "Excluded tool", "input_schema": {"type": "object"}},
+            {"name": "KeepTwo", "description": "Second tool", "input_schema": {"type": "object"}},
+        ],
+    )
+
+    _new_request, prompt, tools = pipeline.preflight_openai(request)
+
+    assert [tool["name"] for tool in tools] == ["KeepOne", "SkipMe", "KeepTwo"]
+    assert "KeepOne(" in (prompt or "")
+    assert "KeepTwo(" in (prompt or "")
+    assert "SkipMe(" not in (prompt or "")
+
+
 def test_prompt_forced_tool_only_lists_selected_tool() -> None:
-    pipeline = ToolMiddlewarePipeline(Settings(M365_ACCESS_TOKEN="fake"))
+    pipeline = ToolMiddlewarePipeline(Settings(access_token="fake"))
     request = OpenAIChatRequest(
         model="m365-opus",
         messages=[OpenAIMessage(role="user", content="read file")],
@@ -177,7 +203,7 @@ def test_prompt_forced_tool_only_lists_selected_tool() -> None:
 
 def test_middleware_openai_tool_choice_none_preserves_no_prompt_injection() -> None:
     pipeline = ToolMiddlewarePipeline(
-        Settings(M365_ACCESS_TOKEN="fake", M365_TOOL_EMULATION_ENABLED=True)
+        Settings(access_token="fake", tool_emulation_enabled=True)
     )
     request = OpenAIChatRequest(
         model="m365-opus",
@@ -196,7 +222,7 @@ def test_middleware_openai_tool_choice_none_preserves_no_prompt_injection() -> N
 
 def test_middleware_anthropic_uses_protocol_neutral_adapter() -> None:
     pipeline = ToolMiddlewarePipeline(
-        Settings(M365_ACCESS_TOKEN="fake", M365_TOOL_EMULATION_ENABLED=True)
+        Settings(access_token="fake", tool_emulation_enabled=True)
     )
     request = AnthropicMessagesRequest(
         model="m365-opus",
@@ -218,13 +244,48 @@ def test_middleware_anthropic_uses_protocol_neutral_adapter() -> None:
 
     assert proxy_request.tools is None
     assert len(tools) == 1
-    assert tools[0]["name"] == "read_file"
-    assert "read_file" in (prompt or "")
+
+
+def test_anthropic_prompt_preserves_actual_tool_metadata() -> None:
+    pipeline = ToolMiddlewarePipeline(Settings(access_token="fake"))
+    request = AnthropicMessagesRequest(
+        model="m365-opus",
+        messages=[],
+        tools=[
+            {
+                "name": "Glob",
+                "description": "Find files by glob pattern",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"pattern": {"type": "string"}},
+                    "required": ["pattern"],
+                },
+            },
+            {
+                "name": "Read",
+                "description": "Read file contents",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"file_path": {"type": "string"}},
+                    "required": ["file_path"],
+                },
+            },
+        ],
+    )
+
+    _proxy_request, prompt, tools = pipeline.preflight_anthropic(request)
+
+    assert [tool["name"] for tool in tools] == ["Glob", "Read"]
+    assert "Glob(input_schema=" in (prompt or "")
+    assert "Find files by glob pattern" in (prompt or "")
+    assert "Read(input_schema=" in (prompt or "")
+    assert "Read file contents" in (prompt or "")
+    assert '"file_path": {"type": "string"}' in (prompt or "")
 
 
 
 def test_middleware_defaults_keep_tools_enabled() -> None:
-    pipeline = ToolMiddlewarePipeline(Settings(M365_ACCESS_TOKEN="fake"))
+    pipeline = ToolMiddlewarePipeline(Settings(access_token="fake"))
     request = OpenAIChatRequest(
         model="m365-opus",
         messages=[OpenAIMessage(role="user", content="hi")],
@@ -241,9 +302,9 @@ def test_middleware_defaults_keep_tools_enabled() -> None:
 def test_middleware_can_be_disabled_without_disabling_legacy_config() -> None:
     pipeline = ToolMiddlewarePipeline(
         Settings(
-            M365_ACCESS_TOKEN="fake",
+            access_token="fake",
             M365_TOOL_MIDDLEWARE_ENABLED=False,
-            M365_TOOL_EMULATION_ENABLED=True,
+            tool_emulation_enabled=True,
         )
     )
     request = OpenAIChatRequest(
@@ -262,7 +323,7 @@ def test_middleware_can_be_disabled_without_disabling_legacy_config() -> None:
 
 def test_middleware_mode_off_disables_facade() -> None:
     pipeline = ToolMiddlewarePipeline(
-        Settings(M365_ACCESS_TOKEN="fake", M365_TOOL_MIDDLEWARE_MODE="off")
+        Settings(access_token="fake", M365_TOOL_MIDDLEWARE_MODE="off")
     )
     request = OpenAIChatRequest(
         model="m365-opus",
@@ -277,7 +338,7 @@ def test_middleware_mode_off_disables_facade() -> None:
 
 
 class _ExplodingEmulation:
-    settings = Settings(M365_ACCESS_TOKEN="fake")
+    settings = Settings(access_token="fake")
 
     def is_emulation_active(self, request):  # pragma: no cover - must not be called
         raise AssertionError("native mode must not call emulation active check")
@@ -319,7 +380,7 @@ async def _unused_execute(*_args, **_kwargs):  # pragma: no cover - test fixture
 def test_native_mode_does_not_delegate_to_emulation() -> None:
     backend = _NoopBackend()
     pipeline = ToolMiddlewarePipeline(
-        Settings(M365_ACCESS_TOKEN="fake", M365_TOOL_MIDDLEWARE_MODE="native"),
+        Settings(access_token="fake", M365_TOOL_MIDDLEWARE_MODE="native"),
         native_backend=backend,
         emulation_backend=_ExplodingEmulation(),
     )
@@ -341,7 +402,7 @@ def test_native_mode_does_not_delegate_to_emulation() -> None:
 def test_auto_mode_falls_back_to_emulation_when_native_unavailable() -> None:
     backend = _NoopBackend()
     pipeline = ToolMiddlewarePipeline(
-        Settings(M365_ACCESS_TOKEN="fake", M365_TOOL_MIDDLEWARE_MODE="auto"),
+        Settings(access_token="fake", M365_TOOL_MIDDLEWARE_MODE="auto"),
         native_backend=backend,
     )
     request = OpenAIChatRequest(
@@ -362,7 +423,7 @@ def test_auto_mode_falls_back_to_emulation_when_native_unavailable() -> None:
 def test_auto_mode_prefers_native_when_backend_can_execute() -> None:
     backend = _CapableBackend()
     pipeline = ToolMiddlewarePipeline(
-        Settings(M365_ACCESS_TOKEN="fake", M365_TOOL_MIDDLEWARE_MODE="auto"),
+        Settings(access_token="fake", M365_TOOL_MIDDLEWARE_MODE="auto"),
         native_backend=backend,
         emulation_backend=_ExplodingEmulation(),
     )
@@ -404,7 +465,11 @@ def test_tool_emulation_injection_success(tmp_path, monkeypatch) -> None:
     injection_file = tmp_path / "tool_emulation_injection.md"
     injection_file.write_text("Hello World from Injection", encoding="utf-8")
     
-    monkeypatch.setenv("TOOL_EMULATION_INJECTION_PATH", str(injection_file))
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config.ini").write_text(
+        f"[settings]\ntool_emulation_injection_path = {str(injection_file.as_posix())}\n",
+        encoding="utf-8",
+    )
     
     try:
         import middleware.tool_emulation
@@ -415,7 +480,7 @@ def test_tool_emulation_injection_success(tmp_path, monkeypatch) -> None:
         assert middleware.tool_emulation._INJECTION_CONTENT == "Hello World from Injection"
         
         pipeline = middleware.pipeline.ToolMiddlewarePipeline(
-            Settings(M365_ACCESS_TOKEN="fake")
+            Settings(access_token="fake")
         )
         request = OpenAIChatRequest(
             model="m365-opus",
@@ -425,7 +490,7 @@ def test_tool_emulation_injection_success(tmp_path, monkeypatch) -> None:
         new_request, prompt, tools = pipeline.preflight_openai(request)
         assert request.messages[0].content == "Hello World from Injection\n---\noriginal message"
     finally:
-        monkeypatch.delenv("TOOL_EMULATION_INJECTION_PATH", raising=False)
+        monkeypatch.undo()
         import middleware.tool_emulation
         import middleware.pipeline
         importlib.reload(middleware.tool_emulation)
@@ -439,7 +504,11 @@ def test_tool_emulation_injection_empty(tmp_path, monkeypatch) -> None:
     injection_file = tmp_path / "tool_emulation_injection.md"
     injection_file.write_text("", encoding="utf-8")
     
-    monkeypatch.setenv("TOOL_EMULATION_INJECTION_PATH", str(injection_file))
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config.ini").write_text(
+        f"[settings]\ntool_emulation_injection_path = {str(injection_file.as_posix())}\n",
+        encoding="utf-8",
+    )
     
     try:
         import middleware.tool_emulation
@@ -450,7 +519,7 @@ def test_tool_emulation_injection_empty(tmp_path, monkeypatch) -> None:
         assert middleware.tool_emulation._INJECTION_CONTENT == ""
         
         pipeline = middleware.pipeline.ToolMiddlewarePipeline(
-            Settings(M365_ACCESS_TOKEN="fake")
+            Settings(access_token="fake")
         )
         request = OpenAIChatRequest(
             model="m365-opus",
@@ -460,7 +529,7 @@ def test_tool_emulation_injection_empty(tmp_path, monkeypatch) -> None:
         new_request, prompt, tools = pipeline.preflight_openai(request)
         assert request.messages[0].content == "original message"
     finally:
-        monkeypatch.delenv("TOOL_EMULATION_INJECTION_PATH", raising=False)
+        monkeypatch.undo()
         import middleware.tool_emulation
         import middleware.pipeline
         importlib.reload(middleware.tool_emulation)
@@ -472,14 +541,18 @@ def test_tool_emulation_injection_missing(tmp_path, monkeypatch) -> None:
     import importlib
     import pytest
     
-    monkeypatch.setenv("TOOL_EMULATION_INJECTION_PATH", "/nonexistent_path/tool_emulation_injection.md")
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config.ini").write_text(
+        "[settings]\ntool_emulation_injection_path = /nonexistent_path/tool_emulation_injection.md\n",
+        encoding="utf-8",
+    )
     
     try:
         import middleware.tool_emulation
         with pytest.raises(FileNotFoundError):
             importlib.reload(middleware.tool_emulation)
     finally:
-        monkeypatch.delenv("TOOL_EMULATION_INJECTION_PATH", raising=False)
+        monkeypatch.undo()
         import middleware.tool_emulation
         import middleware.pipeline
         importlib.reload(middleware.tool_emulation)
@@ -494,7 +567,11 @@ def test_tool_emulation_injection_content_parts(tmp_path, monkeypatch) -> None:
     injection_file = tmp_path / "tool_emulation_injection.md"
     injection_file.write_text("Hello World from Injection", encoding="utf-8")
     
-    monkeypatch.setenv("TOOL_EMULATION_INJECTION_PATH", str(injection_file))
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config.ini").write_text(
+        f"[settings]\ntool_emulation_injection_path = {str(injection_file.as_posix())}\n",
+        encoding="utf-8",
+    )
     
     try:
         import middleware.tool_emulation
@@ -503,7 +580,7 @@ def test_tool_emulation_injection_content_parts(tmp_path, monkeypatch) -> None:
         importlib.reload(middleware.pipeline)
         
         pipeline = middleware.pipeline.ToolMiddlewarePipeline(
-            Settings(M365_ACCESS_TOKEN="fake")
+            Settings(access_token="fake")
         )
         request = OpenAIChatRequest(
             model="m365-opus",
@@ -518,7 +595,7 @@ def test_tool_emulation_injection_content_parts(tmp_path, monkeypatch) -> None:
         new_request, prompt, tools = pipeline.preflight_openai(request)
         assert request.messages[0].content[0].text == "Hello World from Injection\n---\noriginal content"
     finally:
-        monkeypatch.delenv("TOOL_EMULATION_INJECTION_PATH", raising=False)
+        monkeypatch.undo()
         import middleware.tool_emulation
         import middleware.pipeline
         importlib.reload(middleware.tool_emulation)
@@ -533,7 +610,11 @@ def test_tool_emulation_injection_anthropic(tmp_path, monkeypatch) -> None:
     injection_file = tmp_path / "tool_emulation_injection.md"
     injection_file.write_text("Hello World from Injection", encoding="utf-8")
     
-    monkeypatch.setenv("TOOL_EMULATION_INJECTION_PATH", str(injection_file))
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config.ini").write_text(
+        f"[settings]\ntool_emulation_injection_path = {str(injection_file.as_posix())}\n",
+        encoding="utf-8",
+    )
     
     try:
         import middleware.tool_emulation
@@ -542,7 +623,7 @@ def test_tool_emulation_injection_anthropic(tmp_path, monkeypatch) -> None:
         importlib.reload(middleware.pipeline)
         
         pipeline = middleware.pipeline.ToolMiddlewarePipeline(
-            Settings(M365_ACCESS_TOKEN="fake")
+            Settings(access_token="fake")
         )
         request = AnthropicMessagesRequest(
             model="m365-opus",
@@ -552,7 +633,7 @@ def test_tool_emulation_injection_anthropic(tmp_path, monkeypatch) -> None:
         proxy_request, prompt, tools = pipeline.preflight_anthropic(request)
         assert request.messages[0].content == "Hello World from Injection\n---\noriginal Anthropic message"
     finally:
-        monkeypatch.delenv("TOOL_EMULATION_INJECTION_PATH", raising=False)
+        monkeypatch.undo()
         import middleware.tool_emulation
         import middleware.pipeline
         importlib.reload(middleware.tool_emulation)

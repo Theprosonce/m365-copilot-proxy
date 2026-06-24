@@ -91,6 +91,8 @@ class ToolMiddlewarePipeline:
     def preflight_openai(
         self, request: OpenAIChatRequest
     ) -> tuple[OpenAIChatRequest, str | None, list[dict[str, Any]]]:
+        if not self._middleware_enabled():
+            return request, None, self.emulation._normalize_tools(request)
         _apply_message_injection(request.messages)
         normalized_tools = self.emulation._normalize_tools(request)
         if not self._middleware_enabled():
@@ -127,17 +129,35 @@ class ToolMiddlewarePipeline:
     def preflight_anthropic(
         self, request: AnthropicMessagesRequest
     ) -> tuple[OpenAIChatRequest, str | None, list[dict[str, Any]]]:
-        _apply_message_injection(request.messages)
         proxy_request = self.openai_proxy_request_from_anthropic(request)
+        normalized_tools = self.emulation._normalize_tools(proxy_request)
         if not self._middleware_enabled():
-            return proxy_request, None, self.emulation._normalize_tools(proxy_request)
+            return proxy_request, None, normalized_tools
+        _apply_message_injection(request.messages)
+        if not self._middleware_enabled():
+            return proxy_request, None, normalized_tools
 
         context = self._anthropic_context(request)
         if self.mode == "native":
-            return proxy_request, None, self.emulation._normalize_tools(proxy_request)
+            return proxy_request, None, normalized_tools
         if self.mode == "auto" and self._native_can_execute(context):
-            return proxy_request, None, self.emulation._normalize_tools(proxy_request)
-        return self.preflight_openai(proxy_request)
+            return proxy_request, None, normalized_tools
+
+        tool_choice = request.tool_choice
+        if tool_choice is None:
+            tool_choice = "auto"
+        reduced_tools = self.emulation._reduce_tools(
+            normalized_tools, tool_choice, proxy_request
+        )
+        tools_prompt = self.emulation.render_anthropic_prompt(
+            request.tools or [], reduced_tools, tool_choice
+        )
+        new_proxy_request = proxy_request.model_copy(deep=True)
+        new_proxy_request.tools = None
+        new_proxy_request.tool_choice = None
+        new_proxy_request.functions = None
+        new_proxy_request.function_call = None
+        return new_proxy_request, tools_prompt, normalized_tools
 
     async def execute_upstream(self, *args: Any, **kwargs: Any):
         if self.mode == "native":

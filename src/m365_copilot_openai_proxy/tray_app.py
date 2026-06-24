@@ -138,6 +138,7 @@ class ProxyController:
             import uvicorn
 
             from .app import create_app
+from .config import write_config_value
             from .cli import (
                 _auto_refresh_loop,
                 _configure_clients,
@@ -148,31 +149,13 @@ class ProxyController:
             )
 
             s = self.settings
-            os.environ["M365_WORK_GROUNDING"] = (
-                "true" if s.get("work_grounding") else "false"
-            )
-            os.environ["M365_DISABLE_MEMORY"] = (
-                "true" if s.get("temporary_chat", True) else "false"
-            )
-            os.environ["M365_PERSIST_DEFAULT"] = (
-                "true" if s.get("persist_default", True) else "false"
-            )
-            os.environ["M365_WS_REUSE"] = (
-                "true" if s.get("ws_reuse", False) else "false"
-            )
-            os.environ["M365_ANTHROPIC_PASSTHROUGH"] = (
-                "true" if s.get("passthrough_claude", False) else "false"
-            )
-            os.environ["M365_HIDE_ON_TOKEN_SUCCESS"] = (
-                "true" if s.get("hide_on_token_success", True) else "false"
-            )
-            override_key = (s.get("anthropic_key") or "").strip()
-            if override_key:
-                os.environ["M365_ANTHROPIC_KEY"] = override_key
-            else:
-                os.environ.pop(
-                    "M365_ANTHROPIC_KEY", None
-                )  # empty -> use the Claude Code OAuth file
+            write_config_value("work_grounding", "true" if s.get("work_grounding") else "false")
+            write_config_value("disable_memory", "true" if s.get("temporary_chat", True) else "false")
+            write_config_value("persist_default", "true" if s.get("persist_default", True) else "false")
+            write_config_value("ws_reuse", "true" if s.get("ws_reuse", False) else "false")
+            write_config_value("anthropic_passthrough", "true" if s.get("passthrough_claude", False) else "false")
+            write_config_value("hide_on_token_success", "true" if s.get("hide_on_token_success", True) else "false")
+            write_config_value("anthropic_key", (s.get("anthropic_key") or "").strip())
             self.port = int(s.get("port", 8000))
 
             print(f"Starting proxy on {self.base_url} ...")
