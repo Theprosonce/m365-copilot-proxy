@@ -120,7 +120,7 @@ def _summarize_tool_calls(tool_calls: Any) -> str:
     return "; ".join(parts)
 
 
-def translate_openai_request(request: OpenAIChatRequest) -> TranslatedRequest:
+def translate_openai_request(request: OpenAIChatRequest, settings: Settings | None = None) -> TranslatedRequest:
     system_lines: list[str] = []
     transcript_lines: list[str] = []
     tool_result_lines: list[str] = []
@@ -157,12 +157,22 @@ def translate_openai_request(request: OpenAIChatRequest) -> TranslatedRequest:
                 break
     else:
         # Agentic continuation: the last turn is a tool result or assistant action.
-        prompt = (
-            "Continue the task using the conversation and tool results above. "
-            "Either call the next tool(s) using the block format, or give your final answer."
-        )
+        from .config import Settings
+        active_settings = settings or Settings()
+        if tool_result_lines and active_settings.injection_enabled:
+            prompt = (
+                "Continue the task using the conversation and tool results above. "
+                "Either call the next tool(s) using the block format, or give your final answer."
+            )
+        else:
+            prompt = last_user_text or ("" if not active_settings.injection_enabled else "Continue")
+            if last_user_text:
+                for i in range(len(transcript_lines) - 1, -1, -1):
+                    if transcript_lines[i] == f"User: {last_user_text}":
+                        del transcript_lines[i]
+                        break
 
-    if not prompt:
+    if not prompt and (settings or Settings()).injection_enabled:
         raise ValueError("A usable prompt is required.")
 
     additional_context: list[str] = []
@@ -252,6 +262,7 @@ def _tool_result_text(content: Any) -> str:
 
 def translate_anthropic_request(
     request: AnthropicMessagesRequest,
+    settings: Settings | None = None,
 ) -> TranslatedRequest:
     system_lines: list[str] = []
     base_system = flatten_content(request.system).strip()
@@ -311,10 +322,20 @@ def translate_anthropic_request(
     else:
         # Anthropic tool_result blocks are user-role messages without text. Treat
         # those as agentic continuations, not as a repeat of an earlier user prompt.
-        prompt = (
-            "Continue the task using the conversation and tool results above. "
-            "Either call the next tool(s) using the block format, or give your final answer."
-        )
+        from .config import Settings
+        active_settings = settings or Settings()
+        if tool_result_lines and active_settings.injection_enabled:
+            prompt = (
+                "Continue the task using the conversation and tool results above. "
+                "Either call the next tool(s) using the block format, or give your final answer."
+            )
+        else:
+            prompt = last_user_text or last_user_text_current_turn or ("" if not active_settings.injection_enabled else "Continue")
+            if last_user_text:
+                for i in range(len(transcript_lines) - 1, -1, -1):
+                    if transcript_lines[i] == f"User: {last_user_text}":
+                        del transcript_lines[i]
+                        break
 
     additional_context: list[str] = []
     system_text = _join_lines(system_lines)

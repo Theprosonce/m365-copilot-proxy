@@ -221,7 +221,7 @@ def create_app(
             is_emulating = pipeline.is_openai_active(request)
             request, tools_prompt, normalized_tools = pipeline.preflight_openai(request)
 
-            translated = translate_openai_request(request)
+            translated = translate_openai_request(request, settings)
             session = _persistent_session(
                 app, raw_request, request.model, request.user, request.messages
             )
@@ -461,7 +461,7 @@ def create_app(
             if is_emulating and pipeline.force_non_streaming:
                 request.stream = False
 
-            translated = translate_anthropic_request(request)
+            translated = translate_anthropic_request(request, settings)
             session = _persistent_session(
                 app, raw_request, request.model, None, request.messages
             )
@@ -478,6 +478,8 @@ def create_app(
                 ctx = [c for c in ctx if not c.startswith("System instructions:")]
                 clean_prompt = _strip_injection_content(translated.prompt)
                 prompt = f"{tools_prompt}\n\n# User message\n{clean_prompt}"
+
+            print(f"-> SENT:\n{prompt}", flush=True)
 
             if request.stream:
                 return StreamingResponse(
@@ -505,6 +507,7 @@ def create_app(
                     None,
                     await client.chat(prompt, ctx, session, tone, images),
                 )
+            print(f"<- RECV: {text}", flush=True)
         except ValueError as exc:
             print(f"[400] bad request: {exc}")
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -519,15 +522,20 @@ def create_app(
             )
 
         if calls:
-            content = [
-                {
-                    "type": "tool_use",
-                    "id": c.id,
-                    "name": c.function.name,
-                    "input": _args_obj(c.function.arguments),
-                }
-                for c in calls
-            ]
+            content = []
+            if text and text.strip():
+                content.append({"type": "text", "text": text})
+            content.extend(
+                [
+                    {
+                        "type": "tool_use",
+                        "id": c.id,
+                        "name": c.function.name,
+                        "input": _args_obj(c.function.arguments),
+                    }
+                    for c in calls
+                ]
+            )
             return JSONResponse(
                 {
                     "id": f"msg_{uuid.uuid4().hex}",
@@ -690,6 +698,16 @@ def _persistent_session(
     else:
         return None
     session = app.state.session_store.get(key)
+    if not session.process_initialized and session.turn_count > 0:
+        # The proxy was restarted, or the connection was newly initialized in this process.
+        # Rotate to a fresh substrate conversation and reset turn_count to 0 so we clean-start
+        # a fresh substrate thread with the full, un-trimmed context/history seeded.
+        session.conversation_id = str(uuid.uuid4())
+        session.client_session_id = str(uuid.uuid4())
+        session.turn_count = 0
+        session.process_initialized = True
+        app.state.session_store.persist(key, session)
+
     # Edit/regeneration detection (auto-keyed chats only): a faithful continuation resends every
     # assistant turn we produced, so the history should carry >= turn_count assistant turns. If it
     # carries fewer, the client truncated history (edited/regenerated an earlier turn) -> branch
@@ -734,17 +752,11 @@ def _chat_info(key: str, s: PersistentSession) -> ChatInfo:
 def _trim_history(ctx: list[str], session: PersistentSession | None) -> list[str]:
     """On continued turns of a persistent session, drop the re-sent prior transcript: substrate
     keeps the thread under the same conversation_id, so resending it just bloats the prompt and
-    buries the current message. The first turn (turn_count == 0) still seeds full context.
+    buries the current message.
     System-instruction blocks are kept (they carry the client's standing directives).
     Tool results are ALWAYS kept - the model needs them to answer the user's request."""
-    if session is None or session.turn_count == 0:
-        return ctx
-    return [
-        c
-        for c in ctx
-        if not c.startswith("Prior conversation transcript:")
-        or c.startswith("Tool results:")
-    ]
+    # Never trim history! This makes sure the model can use tools without limit, keeping full context seeded on each turn
+    return ctx
 
 
 async def _debug_raw(raw_request: Request) -> None:
@@ -994,10 +1006,12 @@ async def _anthropic_stream(
     )
     yield sse("ping", {"type": "ping"})
 
+    full_text = ""
     try:
         async for delta in client.chat_stream(
             prompt, additional_context, session, tone, images
         ):
+            full_text += delta
             yield sse(
                 "content_block_delta",
                 {
@@ -1006,6 +1020,7 @@ async def _anthropic_stream(
                     "delta": {"type": "text_delta", "text": delta},
                 },
             )
+        print(f"<- RECV: {full_text}", flush=True)
     except SubstrateCopilotError as exc:
         yield sse(
             "error",
@@ -1131,6 +1146,28 @@ async def _anthropic_emulated_stream(
         },
     )
 
+    current_index = 0
+
+    if text and text.strip():
+        yield sse(
+            "content_block_start",
+            {
+                "type": "content_block_start",
+                "index": current_index,
+                "content_block": {"type": "text", "text": ""},
+            },
+        )
+        yield sse(
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": current_index,
+                "delta": {"type": "text_delta", "text": text},
+            },
+        )
+        yield sse("content_block_stop", {"type": "content_block_stop", "index": current_index})
+        current_index += 1
+
     if calls:
         for i, c in enumerate(calls):
             name = (
@@ -1149,11 +1186,12 @@ async def _anthropic_emulated_stream(
             except Exception:
                 args_obj = {}
 
+            block_index = current_index + i
             yield sse(
                 "content_block_start",
                 {
                     "type": "content_block_start",
-                    "index": i,
+                    "index": block_index,
                     "content_block": {
                         "type": "tool_use",
                         "id": cid,
@@ -1166,7 +1204,7 @@ async def _anthropic_emulated_stream(
                 "content_block_delta",
                 {
                     "type": "content_block_delta",
-                    "index": i,
+                    "index": block_index,
                     "delta": {
                         "type": "input_json_delta",
                         "partial_json": json.dumps(args_obj, ensure_ascii=False)
@@ -1175,7 +1213,7 @@ async def _anthropic_emulated_stream(
                     },
                 },
             )
-            yield sse("content_block_stop", {"type": "content_block_stop", "index": i})
+            yield sse("content_block_stop", {"type": "content_block_stop", "index": block_index})
         yield sse(
             "message_delta",
             {
@@ -1185,23 +1223,24 @@ async def _anthropic_emulated_stream(
             },
         )
     else:
-        yield sse(
-            "content_block_start",
-            {
-                "type": "content_block_start",
-                "index": 0,
-                "content_block": {"type": "text", "text": ""},
-            },
-        )
-        yield sse(
-            "content_block_delta",
-            {
-                "type": "content_block_delta",
-                "index": 0,
-                "delta": {"type": "text_delta", "text": text},
-            },
-        )
-        yield sse("content_block_stop", {"type": "content_block_stop", "index": 0})
+        if current_index == 0:
+            yield sse(
+                "content_block_start",
+                {
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {"type": "text", "text": ""},
+                },
+            )
+            yield sse(
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "text_delta", "text": ""},
+                },
+            )
+            yield sse("content_block_stop", {"type": "content_block_stop", "index": 0})
         yield sse(
             "message_delta",
             {

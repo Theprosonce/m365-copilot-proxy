@@ -591,6 +591,32 @@ def test_openai_persistent_session_config_reuses_session(monkeypatch, tmp_path) 
     assert "X-M365-Session-Id: Session attached: work" not in fake.calls[0][1]
 
 
+def test_session_rotation_on_proxy_restart(monkeypatch, tmp_path) -> None:
+    # Store a pre-existing session representing a previous proxy run where turn_count was 3
+    from m365_copilot_openai_proxy.session_store import PersistentSession, PersistentSessionStore
+    store = PersistentSessionStore(db_path=str(tmp_path / "sessions.db"))
+    sess = PersistentSession(conversation_id="old_conv", client_session_id="old_client", turn_count=3)
+    assert sess.process_initialized is False
+    store.persist("header:xyz", sess)
+
+    fake = FakeCopilotClient()
+    app_settings = Settings(session_db_path=str(tmp_path / "sessions.db"))
+    client = build_client(fake, settings=app_settings)
+
+    body = {
+        "model": "m365-copilot",
+        "messages": [{"role": "user", "content": "Hello"}],
+    }
+    resp = client.post("/v1/chat/completions", headers={"x-m365-session-id": "xyz"}, json=body)
+    assert resp.status_code == 200
+
+    updated = client.app.state.session_store.get("header:xyz")
+    assert updated.conversation_id != "old_conv"
+    assert updated.client_session_id != "old_client"
+    assert updated.turn_count == 0
+    assert updated.process_initialized is True
+
+
 def test_openai_persistent_session_header_overrides_config(monkeypatch, tmp_path) -> None:
     (tmp_path / "config.ini").write_text("[settings]\nsession_id = env-work\n", encoding="utf-8")
     monkeypatch.chdir(tmp_path)

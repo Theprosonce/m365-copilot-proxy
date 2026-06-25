@@ -63,7 +63,10 @@ def _has_nonempty_text_part(content: list[Any]) -> bool:
     )
 
 
-def _apply_message_injection(messages: list[Any]) -> None:
+def _apply_message_injection(messages: list[Any], settings: Settings | None = None) -> None:
+    current_settings = settings or Settings()
+    if not current_settings.prompt_injection_enabled or not current_settings.injection_enabled:
+        return
     if not _INJECTION_CONTENT.strip():
         return
 
@@ -191,17 +194,18 @@ class ToolEmulationPipeline:
 
         tools_prompt = None
         tool_choice = request.tool_choice or request.function_call
-        if reduced_tools or tool_choice not in (None, "none", "auto"):
-            cache_key = self._get_prompt_cache_key(reduced_tools, tool_choice)
-            if (
-                self.settings.tool_emulation_cache_rendered_tool_prompts
-                and cache_key in self._prompt_cache
-            ):
-                tools_prompt = self._prompt_cache[cache_key]
-            else:
-                tools_prompt = self._render_prompt(reduced_tools, tool_choice)
-                if self.settings.tool_emulation_cache_rendered_tool_prompts:
-                    self._prompt_cache[cache_key] = tools_prompt
+        if self.settings.prompt_injection_enabled and self.settings.injection_enabled:
+            if reduced_tools or tool_choice not in (None, "none", "auto"):
+                cache_key = self._get_prompt_cache_key(reduced_tools, tool_choice)
+                if (
+                    self.settings.tool_emulation_cache_rendered_tool_prompts
+                    and cache_key in self._prompt_cache
+                ):
+                    tools_prompt = self._prompt_cache[cache_key]
+                else:
+                    tools_prompt = self._render_prompt(reduced_tools, tool_choice)
+                    if self.settings.tool_emulation_cache_rendered_tool_prompts:
+                        self._prompt_cache[cache_key] = tools_prompt
 
         new_req = request.model_copy(deep=True)
         new_req.tools = None
@@ -482,6 +486,19 @@ class ToolEmulationPipeline:
         if not text:
             return None
 
+        # Do not parse title JSON as task output
+        try:
+            cleaned_text = text.strip()
+            if cleaned_text.startswith("```"):
+                lines = cleaned_text.splitlines()
+                if len(lines) >= 2 and lines[0].startswith("```") and lines[-1].startswith("```"):
+                    cleaned_text = "\n".join(lines[1:-1]).strip()
+            parsed_test = json.loads(cleaned_text)
+            if isinstance(parsed_test, dict) and "title" in parsed_test:
+                return None
+        except Exception:
+            pass
+
         text = text[: self.settings.tool_emulation_max_parse_chars]
         calls_data = None
 
@@ -492,6 +509,15 @@ class ToolEmulationPipeline:
             payload = self._extract_delimited_block(text)
             if payload is not None:
                 calls_data = self._try_parse_json(payload)
+
+        # 1.5. Delimited Block Recovery — fallback for when the delimited block doesn't start at the very beginning of the text
+        if calls_data is None:
+            start_idx = text.find(_BEGIN)
+            if start_idx >= 0:
+                end_idx = text.find(_END, start_idx + len(_BEGIN))
+                if end_idx >= 0:
+                    fallback_payload = text[start_idx + len(_BEGIN) : end_idx].strip()
+                    calls_data = self._try_parse_json(fallback_payload)
 
         # 2. Fenced JSON (Markdown recovery)
         if (
@@ -524,7 +550,8 @@ class ToolEmulationPipeline:
         if not isinstance(calls_data, list):
             return None
 
-        tool_map = {t.get("name"): t for t in tools}
+        tool_map = {t.get("name"): t for t in tools if t.get("name")}
+        tool_map_lower = {t.get("name").lower(): t for t in tools if t.get("name")}
 
         tool_calls = []
         for item in calls_data:
@@ -533,6 +560,10 @@ class ToolEmulationPipeline:
             name = item.get("name")
             if not name:
                 continue
+
+            name_lower = name.lower()
+            if name_lower in tool_map_lower:
+                name = tool_map_lower[name_lower].get("name")
 
             args = item.get("arguments", "{}")
             if isinstance(args, str):
@@ -721,6 +752,10 @@ class ToolEmulationPipeline:
         max_retries = (
             1 if self.settings.tool_emulation_repair_invalid_tool_call_once else 0
         )
+        if not self.settings.injection_enabled:
+            max_retries = 0
+            if not text or not text.strip():
+                logger.debug("[DEBUG] empty response received; injection disabled; no recovery prompt injected")
 
         while calls is None and attempt < max_retries:
             if not text.strip():
@@ -741,10 +776,7 @@ class ToolEmulationPipeline:
         run_mode = (self.settings.tool_emulation_run_mode or "auto").strip().lower()
         
         if self.settings.tool_emulation_execution_enabled and run_mode != "platform":
-            iterations = 0
-            max_iterations = max(1, self.settings.tool_emulation_max_agent_iterations)
-            
-            while calls and iterations < max_iterations:
+            while calls:
                 from .runtime_bridge import RuntimeBridge
                 bridge = RuntimeBridge(
                     root_dir=workspace_root or ".",
@@ -764,8 +796,7 @@ class ToolEmulationPipeline:
                         logger.info("Some tool calls are not supported locally in auto mode. Returning to client platform.")
                         break
                     
-                iterations += 1
-                logger.info(f"ReAct Loop: Iteration {iterations} executing tool calls: {calls}")
+                logger.info(f"ReAct Loop: Executing tool calls: {calls}")
                 
                 results = []
                 for call in calls:

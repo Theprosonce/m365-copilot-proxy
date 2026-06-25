@@ -285,3 +285,95 @@ def test_execute_upstream_valid_block_yields_calls(pipeline, weather_tools) -> N
     assert calls is not None
     assert isinstance(calls[0], ToolCall)
     assert calls[0].function.name == "get_weather"
+
+
+def test_extract_delimited_block_with_leading_prose_fallback(pipeline, weather_tools) -> None:
+    text = (
+        "Here is my reasoning...\n"
+        f"{_BEGIN}\n"
+        '[{"name": "get_weather", "arguments": {"location": "London"}}]\n'
+        f"{_END}"
+    )
+    calls = pipeline.parse_response(text, weather_tools)
+    assert calls is not None
+    assert len(calls) == 1
+    assert calls[0].function.name == "get_weather"
+    assert json.loads(calls[0].function.arguments)["location"] == "London"
+
+
+def test_real_world_scenario_thinking_and_tool_call(pipeline, weather_tools) -> None:
+    # Scenario A: Thinking/Planning prose followed by tool block.
+    text = (
+        "Thinking Process:\n"
+        "1. The user wants to check the weather in Tokyo.\n"
+        "2. I should use the get_weather tool with location='Tokyo'.\n\n"
+        "I will now fetch the current weather:\n"
+        f"{_BEGIN}\n"
+        '[{"name": "get_weather", "arguments": {"location": "Tokyo"}}]\n'
+        f"{_END}\n"
+        "Please wait while I retrieve it."
+    )
+    calls = pipeline.parse_response(text, weather_tools)
+    assert calls is not None
+    assert len(calls) == 1
+    assert calls[0].function.name == "get_weather"
+    assert json.loads(calls[0].function.arguments)["location"] == "Tokyo"
+
+
+def test_real_world_scenario_fenced_json_inside_sentinels(pipeline, weather_tools) -> None:
+    # Scenario B: Prose, sentinels, markdown fences wrapping JSON array.
+    text = (
+        "Certainly! Let's get the weather:\n"
+        f"{_BEGIN}\n"
+        "```json\n"
+        "[\n"
+        "  {\n"
+        '    "name": "get_weather",\n'
+        '    "arguments": {\n'
+        '      "location": "New York"\n'
+        "    }\n"
+        "  }\n"
+        "]\n"
+        "```\n"
+        f"{_END}"
+    )
+    calls = pipeline.parse_response(text, weather_tools)
+    assert calls is not None
+    assert len(calls) == 1
+    assert calls[0].function.name == "get_weather"
+    assert json.loads(calls[0].function.arguments)["location"] == "New York"
+
+
+def test_real_world_scenario_multi_tool_parallel_calls(pipeline, weather_tools) -> None:
+    # Scenario C: Multi-tool parallel execution with some prose around.
+    text = (
+        "To satisfy this request, I need to check both Paris and Rome:\n"
+        f"{_BEGIN}\n"
+        "[\n"
+        '  {"name": "get_weather", "arguments": {"location": "Paris"}},\n'
+        '  {"name": "get_weather", "arguments": {"location": "Rome"}}\n'
+        "]\n"
+        f"{_END}"
+    )
+    calls = pipeline.parse_response(text, weather_tools)
+    assert calls is not None
+    assert len(calls) == 2
+    assert calls[0].function.name == "get_weather"
+    assert json.loads(calls[0].function.arguments)["location"] == "Paris"
+    assert calls[1].function.name == "get_weather"
+    assert json.loads(calls[1].function.arguments)["location"] == "Rome"
+
+
+def test_real_world_scenario_pure_fenced_markdown_no_sentinels(pipeline, weather_tools) -> None:
+    # Scenario D: Model completely forgot sentinels but outputted standard markdown fenced JSON.
+    text = (
+        "I need to check the weather. Here is the tool call:\n"
+        "```json\n"
+        '[{"name": "get_weather", "arguments": {"location": "Berlin"}}]\n'
+        "```"
+    )
+    calls = pipeline.parse_response(text, weather_tools)
+    assert calls is not None
+    assert len(calls) == 1
+    assert calls[0].function.name == "get_weather"
+    assert json.loads(calls[0].function.arguments)["location"] == "Berlin"

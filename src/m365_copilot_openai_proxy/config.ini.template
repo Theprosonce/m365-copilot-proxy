@@ -90,6 +90,10 @@ enabled = false
 mode = emulation
 plugin_paths = 
 
+[prompt_injection]
+enabled = true
+injection_enabled = false
+
 [tool_emulation]
 enabled = false
 run_mode = auto
@@ -113,8 +117,6 @@ allow_loose_json_recovery = false
 max_parse_chars = 20000
 validate_schema = true
 repair_invalid_tool_call_once = true
-max_agent_iterations = 1
-max_total_tool_calls = 3
 prevent_repeated_tool_calls = true
 execution_enabled = false
 execution_sandbox = true

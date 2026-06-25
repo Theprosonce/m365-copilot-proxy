@@ -93,7 +93,7 @@ class ToolMiddlewarePipeline:
     ) -> tuple[OpenAIChatRequest, str | None, list[dict[str, Any]]]:
         if not self._middleware_enabled():
             return request, None, self.emulation._normalize_tools(request)
-        _apply_message_injection(request.messages)
+        _apply_message_injection(request.messages, self.settings)
         normalized_tools = self.emulation._normalize_tools(request)
         if not self._middleware_enabled():
             return request, None, normalized_tools
@@ -133,7 +133,7 @@ class ToolMiddlewarePipeline:
         normalized_tools = self.emulation._normalize_tools(proxy_request)
         if not self._middleware_enabled():
             return proxy_request, None, normalized_tools
-        _apply_message_injection(request.messages)
+        _apply_message_injection(request.messages, self.settings)
         if not self._middleware_enabled():
             return proxy_request, None, normalized_tools
 
@@ -149,9 +149,11 @@ class ToolMiddlewarePipeline:
         reduced_tools = self.emulation._reduce_tools(
             normalized_tools, tool_choice, proxy_request
         )
-        tools_prompt = self.emulation.render_anthropic_prompt(
-            request.tools or [], reduced_tools, tool_choice
-        )
+        tools_prompt = None
+        if self.settings.prompt_injection_enabled and self.settings.injection_enabled:
+            tools_prompt = self.emulation.render_anthropic_prompt(
+                request.tools or [], reduced_tools, tool_choice
+            )
         new_proxy_request = proxy_request.model_copy(deep=True)
         new_proxy_request.tools = None
         new_proxy_request.tool_choice = None

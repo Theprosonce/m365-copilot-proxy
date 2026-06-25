@@ -124,6 +124,10 @@ enabled = false
 mode = emulation
 plugin_paths = 
 
+[prompt_injection]
+enabled = true
+injection_enabled = false
+
 [tool_emulation]
 enabled = false
 run_mode = auto
@@ -328,6 +332,14 @@ class Settings(BaseSettings):
         default="", alias="M365_TOOL_MIDDLEWARE_PLUGIN_PATHS"
     )
 
+    # Prompt Injection Policy
+    prompt_injection_enabled: bool = Field(
+        default=True, alias="M365_PROMPT_INJECTION_ENABLED"
+    )
+    injection_enabled: bool = Field(
+        default=False, alias="M365_INJECTION_ENABLED"
+    )
+
     # Tool Emulation Policy
     tool_emulation_enabled: bool = Field(
         default=True, alias="M365_TOOL_EMULATION_ENABLED"
@@ -397,12 +409,6 @@ class Settings(BaseSettings):
     )
     tool_emulation_repair_invalid_tool_call_once: bool = Field(
         default=True, alias="M365_TOOL_EMULATION_REPAIR_ONCE"
-    )
-    tool_emulation_max_agent_iterations: int = Field(
-        default=1, alias="M365_TOOL_EMULATION_MAX_ITERATIONS"
-    )
-    tool_emulation_max_total_tool_calls: int = Field(
-        default=3, alias="M365_TOOL_EMULATION_MAX_TOTAL_CALLS"
     )
     tool_emulation_prevent_repeated_tool_calls: bool = Field(
         default=True, alias="M365_TOOL_EMULATION_PREVENT_REPEAT"

@@ -25,6 +25,7 @@ class PersistentSession:
     last_used: float = field(default_factory=time.time)
     label: str = ""
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    process_initialized: bool = False
 
     def reserve_turn(self) -> CopilotTurn:
         turn = CopilotTurn(
@@ -34,6 +35,7 @@ class PersistentSession:
         )
         self.turn_count += 1
         self.last_used = time.time()
+        self.process_initialized = True
         return turn
 
 
@@ -93,7 +95,9 @@ class PersistentSessionStore:
                 (kv for kv in self._cache.items() if not kv[1].lock.locked()),
                 key=lambda kv: kv[1].last_used,
             )
-            for k, _ in evictable[: len(self._cache) - self._max]:
+            to_evict = len(self._cache) - self._max
+            for i in range(min(to_evict, len(evictable))):
+                k, _ = evictable[i]
                 self._cache.pop(k, None)
         # DB rows for keys not in the hot cache can still pile up; prune them on a throttle.
         if self._db_path and now - self._last_db_prune > 60:

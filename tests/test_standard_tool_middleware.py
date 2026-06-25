@@ -647,3 +647,42 @@ def test_default_injection_does_not_force_unlisted_glob_tool() -> None:
     assert "On first execution always return" not in injection
     assert '{"name": "glob", "arguments": {"pattern": "**/*"}}' not in injection
     assert "Only invoke tools that are actually listed as callable" in injection
+
+
+def test_prompt_injection_disabled() -> None:
+    pipeline = ToolMiddlewarePipeline(
+        Settings(access_token="fake", prompt_injection_enabled=False)
+    )
+    request = OpenAIChatRequest(
+        model="m365-opus",
+        messages=[OpenAIMessage(role="user", content="hi")],
+        tools=[{"type": "function", "function": {"name": "test_tool"}}],
+        tool_choice="auto",
+    )
+
+    new_request, prompt, tools = pipeline.preflight_openai(request)
+
+    assert prompt is None
+    assert request.messages[0].content == "hi"
+    assert len(tools) == 1
+    assert tools[0]["name"] == "test_tool"
+
+
+def test_prompt_injection_disabled_anthropic() -> None:
+    from m365_copilot_openai_proxy.models import AnthropicMessage
+    pipeline = ToolMiddlewarePipeline(
+        Settings(access_token="fake", prompt_injection_enabled=False)
+    )
+    request = AnthropicMessagesRequest(
+        model="m365-opus",
+        messages=[AnthropicMessage(role="user", content="hi anthropic")],
+        tools=[{"name": "test_tool", "description": "Test tool"}],
+        tool_choice="auto",
+    )
+
+    proxy_request, prompt, tools = pipeline.preflight_anthropic(request)
+
+    assert prompt is None
+    assert request.messages[0].content == "hi anthropic"
+    assert len(tools) == 1
+    assert tools[0]["name"] == "test_tool"
