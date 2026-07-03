@@ -1,7 +1,4 @@
 [settings]
-# Microsoft 365 Copilot Substrate access token
-access_token = 
-
 # Time zone used by the proxy (default: Asia/Tokyo)
 time_zone = Asia/Tokyo
 
@@ -18,7 +15,7 @@ persist_default = true
 disable_memory = true
 
 # SQLite database path for session/conversation store (empty -> default home dir)
-session_db_path = 
+session_db_path =
 
 # Cap on stored conversations (0 -> no cap)
 session_max = 1000
@@ -35,20 +32,20 @@ debug = false
 timing = false
 
 # Path overrides
-substrate_config_path = 
-prompt_catalog_path = 
-tool_emulation_injection_path = 
+substrate_config_path =
+prompt_catalog_path =
+tool_emulation_injection_path =
 
 # Browser settings
 edge_headless = false
 edge_path = C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe
 
 # OAuth / Auth state (automatically populated/refreshed)
-refresh_token = 
-tenant_id = 
-client_id = 
-session_id = 
-session_salt = 
+refresh_token =
+tenant_id =
+client_id =
+session_id =
+session_salt =
 
 # Keep WebSocket alive per persistent session
 ws_reuse = false
@@ -60,8 +57,8 @@ hide_on_token_success = true
 anthropic_passthrough = false
 anthropic_upstream = https://api.anthropic.com
 anthropic_version = 2023-06-01
-anthropic_creds_file = 
-anthropic_key = 
+anthropic_creds_file =
+anthropic_key =
 
 [serve]
 host = 127.0.0.1
@@ -88,16 +85,18 @@ undo = false
 [tool_middleware]
 enabled = false
 mode = emulation
-plugin_paths = 
+plugin_paths =
 
 [prompt_injection]
-enabled = true
-injection_enabled = false
+# Canonical prompt injection gate. Keep false for passive tool emulation:
+# tools can still be parsed from model output, but no tool protocol,
+# continuation, or empty-output recovery prompt is injected.
+enabled = false
 
 [tool_emulation]
 enabled = false
 run_mode = auto
-exclude_tools = 
+exclude_tools =
 emulate_when_capability_unknown = true
 native_passthrough = true
 mode = response_only
@@ -117,6 +116,16 @@ allow_loose_json_recovery = false
 max_parse_chars = 20000
 validate_schema = true
 repair_invalid_tool_call_once = true
+protocol_error_retry_limit = 1
 prevent_repeated_tool_calls = true
 execution_enabled = false
 execution_sandbox = true
+
+[debug]
+tooling_json_log_enabled = true
+tooling_json_log_file = logs/debug_tooling.jsonl
+tooling_json_log_max_chars = 50000
+tooling_raw_log_enabled = true
+tooling_raw_log_dir = logs
+tooling_raw_log_name_pattern = activity-{timestamp}.log
+tooling_raw_log_max_chars = 100000

@@ -6,6 +6,7 @@ import os
 import re
 import time
 import uuid
+from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 
@@ -84,6 +85,14 @@ def create_app(
     settings: Settings | None = None,
     copilot_client_factory: Callable[[], SubstrateCopilotClient] | None = None,
 ) -> FastAPI:
+    resolved_settings = settings or Settings()
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        if session := (resolved_settings.session_id or "").strip():
+            print(f"X-M365-Session-Id: Session attached: {session}", flush=True)
+        yield
+
     app = FastAPI(
         title="Microsoft 365 Copilot OpenAI Proxy",
         description=(
@@ -104,8 +113,8 @@ def create_app(
             },
             {"name": "ops", "description": "Health and token status."},
         ],
+        lifespan=lifespan,
     )
-    resolved_settings = settings or Settings()
     app.state.settings = resolved_settings
     app.state.token_store = AccessTokenStore(resolved_settings.access_token)
     app.state.session_store = PersistentSessionStore(
@@ -115,10 +124,6 @@ def create_app(
         ttl_seconds=resolved_settings.session_ttl_seconds,
     )
 
-    @app.on_event("startup")
-    async def _print_session_attached_on_startup() -> None:
-        if session := _session_id_config_value():
-            print(f"X-M365-Session-Id: Session attached: {session}", flush=True)
     app.state.copilot_client_factory = copilot_client_factory or (
         lambda: SubstrateCopilotClient(
             app.state.token_store.get(),
@@ -440,6 +445,62 @@ def create_app(
             f"-> /v1/messages model={request.model!r} stream={getattr(request, 'stream', False)} "
             f"route={'substrate' if ours else 'passthrough'} passthrough_enabled={settings.anthropic_passthrough}"
         )
+
+        # ----------------- DIAGNOSTIC LOGGING -----------------
+        from .debug_logger import request_context, log_event, log_raw_event
+        import uuid
+        import json
+        req_id = raw_request.headers.get("x-request-id") or uuid.uuid4().hex
+        ctx_data = {
+            "request_id": req_id,
+            "session_id": None,
+            "route": "substrate" if ours else "passthrough",
+            "api": "/v1/messages",
+            "model": request.model,
+            "stream": getattr(request, "stream", False)
+        }
+        request_context.set(ctx_data)
+
+        # 1. Incoming proxy request
+        try:
+            req_dict = request.model_dump() if hasattr(request, "model_dump") else request.dict()
+        except Exception:
+            req_dict = str(request)
+
+        log_event("RAW_REQUEST_RECEIVED", {
+            "path": "/v1/messages",
+            "method": "POST",
+            "model": request.model,
+            "stream": getattr(request, "stream", False),
+            "messages_or_input": req_dict
+        })
+
+        # 2. Message before transformation
+        messages_before = []
+        try:
+            messages_before = request.model_dump()["messages"] if hasattr(request, "model_dump") else request.dict()["messages"]
+        except Exception:
+            pass
+
+        text_before = ""
+        if request.messages:
+            for msg in reversed(request.messages):
+                if getattr(msg, "role", None) == "user":
+                    if isinstance(msg.content, str):
+                        text_before = msg.content
+                    elif isinstance(msg.content, list):
+                        text_before = " ".join(getattr(p, "text", "") or "" for p in msg.content if getattr(p, "type", None) == "text")
+                    break
+
+        log_event("MODEL_SENT_BEFORE_MODIFICATION", {
+            "text": text_before,
+            "messages": messages_before
+        })
+        log_raw_event("Sent Before Modification", {
+            "messages": messages_before
+        })
+        # ------------------------------------------------------
+
         # Log the tool selected by the model later, not every tool merely offered by the client.
         if settings.anthropic_passthrough and not ours:
             from .anthropic_passthrough import credential_available, forward_messages
@@ -465,6 +526,57 @@ def create_app(
             session = _persistent_session(
                 app, raw_request, request.model, None, request.messages
             )
+
+            # Update session id in request context
+            if session:
+                ctx_data["session_id"] = session.conversation_id
+                request_context.set(ctx_data)
+
+            # 14. Workspace and Title decisions
+            workspace_detected, workspace_cleaned = _detect_workspace_mode(request.messages) if request.messages else (False, "")
+            if workspace_detected:
+                log_event("WORKSPACE_MODE_DECISION", {
+                    "detected": True,
+                    "source": "latest_user_message",
+                    "cleaned_text": workspace_cleaned
+                })
+                log_raw_event("Workspace", {
+                    "detected": True,
+                    "source": "latest_user_message",
+                    "cleaned_text": workspace_cleaned
+                })
+
+            title_gen = False
+            if request.messages:
+                last_msg_text = ""
+                for msg in reversed(request.messages):
+                    if getattr(msg, "role", None) == "user":
+                        if isinstance(msg.content, str):
+                            last_msg_text = msg.content
+                        elif isinstance(msg.content, list):
+                            last_msg_text = " ".join(getattr(p, "text", "") or "" for p in msg.content if getattr(p, "type", None) == "text")
+                        break
+                if "title" in last_msg_text.lower():
+                    title_gen = True
+
+            # 3. Modification decision
+            injection_active = bool(settings.prompt_injection_enabled)
+            prompt_injection_applied = bool(is_emulating and tools_prompt)
+
+            log_event("MESSAGE_TRANSFORM_DECISION", {
+                "workspace_mode": workspace_detected,
+                "title_generation_detected": title_gen,
+                "injection_enabled": injection_active,
+                "prompt_injection_applied": prompt_injection_applied,
+                "continuation_injected": False,
+                "empty_recovery_injected": False,
+                "reason": "emulation active" if is_emulating else "passive_mode"
+            })
+            log_raw_event("Modification", {
+                "changed": prompt_injection_applied,
+                "reason": "tool_emulation_injection" if prompt_injection_applied else "injection_enabled_false"
+            })
+
             tone = resolve_tone(request.model)
             images = _request_images(request.messages)
             _debug_images(request.messages, images)
@@ -478,8 +590,42 @@ def create_app(
                 ctx = [c for c in ctx if not c.startswith("System instructions:")]
                 clean_prompt = _strip_injection_content(translated.prompt)
                 prompt = f"{tools_prompt}\n\n# User message\n{clean_prompt}"
+                log_event("MESSAGE_MODIFIED", {
+                    "reason": "tool_emulation_injection",
+                    "before": clean_prompt,
+                    "after": prompt
+                })
+            else:
+                log_event("MESSAGE_NOT_MODIFIED", {
+                    "reason": "passive_mode" if not is_emulating else "no injection applied"
+                })
 
             print(f"-> SENT:\n{prompt}", flush=True)
+
+            log_raw_event("Sent After Modification", {
+                "text": prompt,
+                "additional_context": ctx
+            })
+
+            from .substrate_client import _combine_text
+            log_raw_event("Sent", {
+                "model": settings.model_alias,
+                "messages": [{"role": "user", "content": _combine_text(prompt, ctx)}]
+            })
+
+            # 4. Final upstream request
+            try:
+                raw_payload_data = request.model_dump() if hasattr(request, "model_dump") else request.dict()
+            except Exception:
+                raw_payload_data = {}
+
+            log_event("MODEL_SENT_FINAL", {
+                "api": "/v1/messages",
+                "model": settings.model_alias,
+                "stream": request.stream,
+                "text": prompt,
+                "raw_payload": raw_payload_data
+            })
 
             if request.stream:
                 return StreamingResponse(
@@ -507,6 +653,42 @@ def create_app(
                     None,
                     await client.chat(prompt, ctx, session, tone, images),
                 )
+                log_event("MODEL_RECV_RAW", {
+                    "status_code": 200,
+                    "raw": text,
+                    "chunks": [text]
+                })
+
+            # 6. Extracted assistant text
+            content_block_count = 1 if (text and text.strip()) else 0
+            tool_use_block_count = len(calls) if calls else 0
+            log_event("MODEL_RECV_EXTRACTED", {
+                "text": text or "",
+                "text_len": len(text) if text else 0,
+                "content_block_count": content_block_count,
+                "tool_use_block_count": tool_use_block_count,
+                "reasoning_block_count": 0
+            })
+            log_raw_event("Receive", {
+                "content": text or ""
+            })
+            log_raw_event("Extracted Text", {
+                "text": text or ""
+            })
+
+            # 7. Empty response decision
+            if not text or not text.strip():
+                log_event("EMPTY_RESPONSE_DECISION", {
+                    "injection_enabled": injection_active,
+                    "recovery_injected": False,
+                    "continuation_injected": False,
+                    "reason": "injection disabled; pass through empty response" if not injection_active else "emulation returned empty response"
+                })
+                log_raw_event("Empty Response", {
+                    "empty": True,
+                    "reason": "injection disabled; pass through empty response" if not injection_active else "emulation returned empty response"
+                })
+
             print(f"<- RECV: {text}", flush=True)
         except ValueError as exc:
             print(f"[400] bad request: {exc}")
@@ -536,18 +718,22 @@ def create_app(
                     for c in calls
                 ]
             )
-            return JSONResponse(
-                {
-                    "id": f"msg_{uuid.uuid4().hex}",
-                    "type": "message",
-                    "role": "assistant",
-                    "model": settings.model_alias,
-                    "content": content,
-                    "stop_reason": "tool_use",
-                    "stop_sequence": None,
-                    "usage": {"input_tokens": 0, "output_tokens": 0},
-                }
-            )
+            resp_payload = {
+                "id": f"msg_{uuid.uuid4().hex}",
+                "type": "message",
+                "role": "assistant",
+                "model": settings.model_alias,
+                "content": content,
+                "stop_reason": "tool_use",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 0, "output_tokens": 0},
+            }
+            log_event("TOOL_RESULT_RETURNED", {
+                "format": "anthropic",
+                "payload_len": len(json.dumps(resp_payload)),
+                "payload": resp_payload
+            })
+            return JSONResponse(resp_payload)
 
         return JSONResponse(
             {
@@ -636,6 +822,31 @@ def _project_hint(messages: list) -> str:
     return mm.group(1).rstrip("\\/") if mm else ""
 
 
+def _detect_workspace_mode(messages: list) -> tuple[bool, str]:
+    if not messages:
+        return False, ""
+
+    latest_user_msg = None
+    for m in reversed(messages):
+        if getattr(m, "role", None) == "user":
+            latest_user_msg = m
+            break
+
+    if not latest_user_msg:
+        return False, ""
+
+    text = _msg_text(latest_user_msg).strip()
+
+    if text == "workspace=on":
+        return True, "workspace=on"
+
+    match = re.match(r"^\s*<session>\s*workspace=on\s*</session>\s*$", text, re.IGNORECASE)
+    if match:
+        return True, "workspace=on"
+
+    return False, ""
+
+
 # VS Code injects these identical wrapper turns at the head of EVERY chat in a workspace; keying
 # on them would collapse all chats in one project into a single substrate conversation.
 _VSCODE_WRAPPERS = ("<environment_info", "<workspace_info", "<attachments")
@@ -698,6 +909,8 @@ def _persistent_session(
     else:
         return None
     session = app.state.session_store.get(key)
+    rotated = False
+    reason = None
     if not session.process_initialized and session.turn_count > 0:
         # The proxy was restarted, or the connection was newly initialized in this process.
         # Rotate to a fresh substrate conversation and reset turn_count to 0 so we clean-start
@@ -707,6 +920,8 @@ def _persistent_session(
         session.turn_count = 0
         session.process_initialized = True
         app.state.session_store.persist(key, session)
+        rotated = True
+        reason = "process_restart"
 
     # Edit/regeneration detection (auto-keyed chats only): a faithful continuation resends every
     # assistant turn we produced, so the history should carry >= turn_count assistant turns. If it
@@ -717,10 +932,24 @@ def _persistent_session(
             1 for m in messages if getattr(m, "role", None) == "assistant"
         )
         if assistant_turns < session.turn_count:
+            old_id = session.conversation_id
             session = app.state.session_store.update(key, rotate=True) or session
+            if session.conversation_id != old_id:
+                rotated = True
+                reason = "history_truncated_or_regenerated"
     if not session.label and messages:
         session.label = _session_label(messages)
     app.state.session_store.persist(key, session)
+
+    from .debug_logger import log_event, log_raw_event
+    log_event("SESSION_DECISION", {
+        "session_id": session.conversation_id if session else None,
+        "rotated": rotated,
+        "reason": reason or ("persistent_session_active" if session else "session_disabled")
+    })
+    log_raw_event("Session", {
+        "conversation_id": session.conversation_id if session else None
+    })
     return session
 
 
@@ -1007,11 +1236,22 @@ async def _anthropic_stream(
     yield sse("ping", {"type": "ping"})
 
     full_text = ""
+    chunk_index = 0
+    from .debug_logger import log_event, log_raw_event
     try:
         async for delta in client.chat_stream(
             prompt, additional_context, session, tone, images
         ):
             full_text += delta
+            log_event("MODEL_RECV_STREAM_CHUNK", {
+                "chunk_index": chunk_index,
+                "raw_chunk": delta,
+                "parsed_chunk": {"type": "text", "text": delta}
+            })
+            log_raw_event("Receive Chunk", {
+                "chunk": delta
+            })
+            chunk_index += 1
             yield sse(
                 "content_block_delta",
                 {
@@ -1021,7 +1261,51 @@ async def _anthropic_stream(
                 },
             )
         print(f"<- RECV: {full_text}", flush=True)
+
+        # 5. Raw response
+        log_event("MODEL_RECV_RAW", {
+            "status_code": 200,
+            "raw": full_text,
+            "chunks": [full_text]
+        })
+        log_raw_event("Receive", {
+            "content": full_text
+        })
+
+        # 6. Extracted assistant text
+        log_event("MODEL_RECV_EXTRACTED", {
+            "text": full_text,
+            "text_len": len(full_text),
+            "content_block_count": 1 if full_text.strip() else 0,
+            "tool_use_block_count": 0,
+            "reasoning_block_count": 0
+        })
+        log_raw_event("Extracted Text", {
+            "text": full_text
+        })
+
+        # 7. Empty response decision
+        if not full_text or not full_text.strip():
+            log_event("EMPTY_RESPONSE_DECISION", {
+                "injection_enabled": False,
+                "recovery_injected": False,
+                "continuation_injected": False,
+                "reason": "stream returned empty content"
+            })
+            log_raw_event("Empty Response", {
+                "empty": True,
+                "reason": "stream returned empty content"
+            })
+
     except SubstrateCopilotError as exc:
+        log_event("MODEL_RECV_RAW", {
+            "status_code": 502,
+            "raw": str(exc),
+            "chunks": []
+        })
+        log_raw_event("Error", {
+            "error": str(exc)
+        })
         yield sse(
             "error",
             {"type": "error", "error": {"type": "upstream_error", "message": str(exc)}},

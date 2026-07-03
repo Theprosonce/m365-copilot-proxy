@@ -1,6 +1,6 @@
 # Configuration Guide
 
-Microsoft 365 Copilot OpenAI Proxy is configured entirely using a standard INI configuration file named `config.ini`. On first run, if `config.ini` is missing, the proxy will automatically create it in the project root directory using `config.ini.template` (or an embedded template).
+Microsoft 365 Copilot OpenAI Proxy uses `config.ini` for non-secret configuration and `.env` for the short-lived Substrate access token. On first run, if `config.ini` is missing, the proxy will automatically create it in the project root directory using `config.ini.template` (or an embedded template).
 
 ## Configuration Sections
 
@@ -16,9 +16,11 @@ Microsoft 365 Copilot OpenAI Proxy is configured entirely using a standard INI c
 
 ## 1. Core Settings (`[settings]`)
 
+The short-lived Microsoft 365 Copilot Substrate access token is not stored in `config.ini`. It is read from `M365_ACCESS_TOKEN` in `.env` or the process environment. Startup token-capture routines update `.env` automatically.
+
+
 | Parameter | Default | Description |
 | :--- | :--- | :--- |
-| **`access_token`** | *empty* | The short-lived Microsoft 365 Copilot Substrate access token. If missing, startup token-capture routines will automatically acquire and populate this field. |
 | **`time_zone`** | `Asia/Tokyo` | Time zone used by the proxy when communicating with the Substrate API. |
 | **`model_alias`** | `m365-copilot` | The OpenAI model alias name returned by `/v1/models` and used by inference endpoints. |
 | **`work_grounding`** | `true` | `true` uses **Enterprise grounding** (grants access to corporate/work context and files); `false` uses **Web grounding**. Coding agents usually want `false` to avoid pulling irrelevant internal company documents. |

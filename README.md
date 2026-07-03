@@ -52,7 +52,7 @@ The server starts at:
 http://127.0.0.1:8000
 ```
 
-On first run, the proxy opens a dedicated Browser window. Sign in to M365 Copilot there once. The proxy will capture the required Substrate token and write it to `config.ini`.
+On first run, the proxy opens a dedicated Browser window. Sign in to M365 Copilot there once. The proxy will capture the required Substrate token and write it to `.env` as `M365_ACCESS_TOKEN`.
 
 The dedicated browser profile is stored at:
 
@@ -353,7 +353,7 @@ Then paste a fresh Substrate WebSocket URL:
 5. Go to **Headers** -> right-click the **Request URL** -> **Copy link address**.
 6. Paste it into the terminal.
 
-The command extracts `access_token` automatically and writes it to `config.ini`.
+The command extracts `access_token` automatically and writes it to `.env` as `M365_ACCESS_TOKEN`.
 
 ## Token Health
 
@@ -463,15 +463,15 @@ $r.content[0].text
 ## Security Notes
 
 - The proxy listens on `127.0.0.1` by default.
-- The browser token is stored locally in `config.ini`.
-- `config.ini`, `.venv/`, Python cache files, `*.har` captures, and `debug.log` are ignored by Git. HAR captures and debug logs can contain tokens, cookies, and tenant data — never commit them.
+- The browser token is stored locally in `.env` as `M365_ACCESS_TOKEN`.
+- `config.ini`, `.env`, `.venv/`, Python cache files, `*.har` captures, and `debug.log` are ignored by Git. HAR captures and debug logs can contain tokens, cookies, and tenant data — never commit them.
 - The proxy does not send your token to any external service besides Microsoft 365 Copilot's own `substrate.office.com` endpoint.
-- Anyone who can read your `config.ini` can use the token until it expires. Treat it like a secret.
+- Anyone who can read your `.env` can use the token until it expires. Treat it like a secret.
 - Temporary chats (`disable_memory = true` in `config.ini`, default) keep proxy traffic out of your Copilot history, but the requests still hit Microsoft's servers — this is normal Copilot use, not anonymisation.
 
 ## Configuration
 
-All configuration is done via `config.ini` in the current working directory or the project root.
+Non-secret configuration is done via `config.ini` in the current working directory or the project root. The Substrate access token is stored only in `.env` as `M365_ACCESS_TOKEN`.
 
 For a comprehensive guide to all configuration sections, variables, and usage details, please see [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
 

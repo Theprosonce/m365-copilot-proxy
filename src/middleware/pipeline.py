@@ -150,7 +150,7 @@ class ToolMiddlewarePipeline:
             normalized_tools, tool_choice, proxy_request
         )
         tools_prompt = None
-        if self.settings.prompt_injection_enabled and self.settings.injection_enabled:
+        if self.settings.prompt_injection_enabled:
             tools_prompt = self.emulation.render_anthropic_prompt(
                 request.tools or [], reduced_tools, tool_choice
             )

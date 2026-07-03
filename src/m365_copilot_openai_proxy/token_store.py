@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import base64
-import configparser
+import os
 import json
 import threading
 import time
@@ -22,10 +22,14 @@ def is_substrate_token_claims(claims: dict[str, Any]) -> bool:
     return str(claims.get("aud", "")).startswith(SUBSTRATE_AUDIENCE_PREFIX)
 
 
+ACCESS_TOKEN_ENV_KEY = "M365_ACCESS_TOKEN"
+ENV_PATH = Path(".env")
+
+
 class AccessTokenStore:
-    def __init__(self, token: str, config_path: Path | str = "config.ini"):
+    def __init__(self, token: str, env_path: Path | str = ENV_PATH):
         self._token = token
-        self._config_path = Path(config_path)
+        self._env_path = Path(env_path)
         self._mtime_ns = self._read_mtime()
         self._lock = threading.RLock()
 
@@ -68,24 +72,30 @@ class AccessTokenStore:
         mtime_ns = self._read_mtime()
         if mtime_ns is None or mtime_ns == self._mtime_ns:
             return
-        token = _read_ini_token(self._config_path)
+        token = _read_env_token(self._env_path)
         if token:
             self._token = token
             self._mtime_ns = mtime_ns
 
     def _read_mtime(self) -> int | None:
         try:
-            return self._config_path.stat().st_mtime_ns
+            return self._env_path.stat().st_mtime_ns
         except FileNotFoundError:
             return None
 
 
-def _read_ini_token(path: Path) -> str | None:
+def _read_env_token(path: Path) -> str | None:
+    token = os.environ.get(ACCESS_TOKEN_ENV_KEY)
+    if token:
+        return _clean_ini_value(token)
     try:
-        parser = configparser.ConfigParser()
-        parser.read(path, encoding="utf-8")
-        if parser.has_section("settings") and parser.has_option("settings", "access_token"):
-            return _clean_ini_value(parser.get("settings", "access_token"))
+        for line in path.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#") or "=" not in stripped:
+                continue
+            key, value = stripped.split("=", 1)
+            if key.strip() == ACCESS_TOKEN_ENV_KEY:
+                return _clean_ini_value(value)
     except Exception:
         pass
     return None

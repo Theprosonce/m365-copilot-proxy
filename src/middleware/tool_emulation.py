@@ -65,7 +65,7 @@ def _has_nonempty_text_part(content: list[Any]) -> bool:
 
 def _apply_message_injection(messages: list[Any], settings: Settings | None = None) -> None:
     current_settings = settings or Settings()
-    if not current_settings.prompt_injection_enabled or not current_settings.injection_enabled:
+    if not current_settings.prompt_injection_enabled:
         return
     if not _INJECTION_CONTENT.strip():
         return
@@ -133,9 +133,7 @@ def _apply_message_injection(messages: list[Any], settings: Settings | None = No
                 msg.content = f"{_INJECTION_CONTENT}\n---\n"
 
 
-FILE_TOOLS_WITH_FILEPATH = frozenset({"read"})
-
-FILE_TOOLS_WITH_PATH = frozenset({"write", "edit", "glob", "list", "search", "bash"})
+from emulator.schemas import FILE_TOOLS_WITH_FILEPATH, FILE_TOOLS_WITH_PATH, _DEFAULT_TOOL_SCHEMAS
 
 
 class ToolEmulationPipeline:
@@ -194,7 +192,7 @@ class ToolEmulationPipeline:
 
         tools_prompt = None
         tool_choice = request.tool_choice or request.function_call
-        if self.settings.prompt_injection_enabled and self.settings.injection_enabled:
+        if self.settings.prompt_injection_enabled:
             if reduced_tools or tool_choice not in (None, "none", "auto"):
                 cache_key = self._get_prompt_cache_key(reduced_tools, tool_choice)
                 if (
@@ -483,8 +481,19 @@ class ToolEmulationPipeline:
     def parse_response(
         self, text: str, tools: list[dict[str, Any]], workspace_root: str | None = None
     ) -> list[ToolCall] | None:
+        from m365_copilot_openai_proxy.debug_logger import log_event, log_raw_event
         if not text:
+            log_event("TOOL_PARSE_SKIPPED", {
+                "source": "assistant_output",
+                "reason": "empty response text"
+            })
             return None
+
+        log_event("TOOL_PARSE_INPUT", {
+            "source": "assistant_output",
+            "text": text,
+            "text_len": len(text)
+        })
 
         # Do not parse title JSON as task output
         try:
@@ -495,6 +504,22 @@ class ToolEmulationPipeline:
                     cleaned_text = "\n".join(lines[1:-1]).strip()
             parsed_test = json.loads(cleaned_text)
             if isinstance(parsed_test, dict) and "title" in parsed_test:
+                log_event("TITLE_GENERATION_DECISION", {
+                    "detected": True,
+                    "short_circuited": True,
+                    "appended_to_task_history": False
+                })
+                log_raw_event("Title", {
+                    "title_generation_detected": True,
+                    "reason": "user requested title"
+                })
+                self._last_parse_result = {
+                    "has_sentinels": False,
+                    "raw_tool_calls": [],
+                    "accepted_tool_calls": [],
+                    "rejected_tool_calls": [],
+                    "parse_error": None,
+                }
                 return None
         except Exception:
             pass
@@ -541,29 +566,88 @@ class ToolEmulationPipeline:
         ):
             calls_data = self._first_balanced_array(text)
 
+        has_sentinels = text.find(_BEGIN) >= 0 or bool(re.search(r"```(?:json|tool_calls)", text))
         if not calls_data:
+            if has_sentinels:
+                # try to extract a candidate JSON block for the raw_block logging
+                raw_block_text = None
+                m = re.search(r"```(?:json|tool_calls)?\s*(\[.*?\])\s*```", text, re.DOTALL)
+                if m:
+                    raw_block_text = m.group(1)
+                else:
+                    start_idx = text.find(_BEGIN)
+                    if start_idx >= 0:
+                        end_idx = text.find(_END, start_idx + len(_BEGIN))
+                        if end_idx >= 0:
+                            raw_block_text = text[start_idx + len(_BEGIN) : end_idx].strip()
+                self._last_parse_result = {
+                    "has_sentinels": True,
+                    "raw_tool_calls": [],
+                    "accepted_tool_calls": [],
+                    "rejected_tool_calls": [],
+                    "parse_error": "invalid JSON",
+                    "raw_block": raw_block_text or text
+                }
+                log_event("TOOL_PARSE_RESULT", {
+                    "found": True,
+                    "parse_error": "invalid JSON",
+                    "raw_block": raw_block_text or text
+                })
+                log_raw_event("Tool Parse", {
+                    "found": True,
+                    "reason": "invalid JSON",
+                    "raw_block": raw_block_text or text
+                })
+            else:
+                self._last_parse_result = {
+                    "has_sentinels": False,
+                    "raw_tool_calls": [],
+                    "accepted_tool_calls": [],
+                    "rejected_tool_calls": [],
+                    "parse_error": None,
+                }
+                log_event("TOOL_PARSE_RESULT", {
+                    "found": False,
+                    "tool_call_count": 0
+                })
+                log_raw_event("Tool Parse", {
+                    "found": False,
+                    "reason": "no TOOL_CALLS block"
+                })
             return None
 
         if isinstance(calls_data, dict):
             calls_data = [calls_data]
 
         if not isinstance(calls_data, list):
+            self._last_parse_result = {
+                "has_sentinels": has_sentinels,
+                "raw_tool_calls": [],
+                "accepted_tool_calls": [],
+                "rejected_tool_calls": [],
+                "parse_error": "invalid JSON",
+            }
             return None
 
         tool_map = {t.get("name"): t for t in tools if t.get("name")}
-        tool_map_lower = {t.get("name").lower(): t for t in tools if t.get("name")}
+        # Merge default schemas for standard workspace tools if they aren't already registered
+        for default_name, default_schema in _DEFAULT_TOOL_SCHEMAS.items():
+            if default_name not in tool_map:
+                tool_map[default_name] = default_schema
 
+        tool_map_lower = {t.get("name").lower(): t for t in tool_map.values() if t.get("name")}
+
+        raw_tool_calls = []
+        accepted_tool_calls = []
+        rejected_tool_calls = []
         tool_calls = []
+
         for item in calls_data:
             if not isinstance(item, dict):
                 continue
             name = item.get("name")
             if not name:
                 continue
-
-            name_lower = name.lower()
-            if name_lower in tool_map_lower:
-                name = tool_map_lower[name_lower].get("name")
 
             args = item.get("arguments", "{}")
             if isinstance(args, str):
@@ -573,6 +657,25 @@ class ToolEmulationPipeline:
                     args = {}
             if not isinstance(args, dict):
                 args = {}
+
+            raw_tool_calls.append({
+                "name": name,
+                "arguments": args
+            })
+
+            if name not in tool_map:
+                name_lower = name.lower()
+                if name_lower in tool_map_lower:
+                    normalized_name = tool_map_lower[name_lower].get("name")
+                    if normalized_name != name:
+                        log_event("TOOL_NAME_NORMALIZED", {
+                            "from": name,
+                            "to": normalized_name
+                        })
+                    name = normalized_name
+
+            rejected = False
+            rejection_reason = ""
 
             if workspace_root:
                 try:
@@ -594,13 +697,15 @@ class ToolEmulationPipeline:
                             or resolved_path == workspace_path
                         ):
                             logger.warning(f"Rejected path outside workspace: {fp}")
-                            continue
-
-                        args["filePath"] = str(resolved_path)
+                            rejected = True
+                            rejection_reason = "path outside workspace"
+                        else:
+                            args["filePath"] = str(resolved_path)
 
                     # Normalize and validate path only for known file tools
                     if (
-                        name in FILE_TOOLS_WITH_PATH
+                        not rejected
+                        and name in FILE_TOOLS_WITH_PATH
                         and "path" in args
                         and isinstance(args["path"], str)
                     ):
@@ -616,50 +721,75 @@ class ToolEmulationPipeline:
                             or resolved_path == workspace_path
                         ):
                             logger.warning(f"Rejected path outside workspace: {p}")
-                            continue
-
-                        args["path"] = str(resolved_path)
+                            rejected = True
+                            rejection_reason = "path outside workspace"
+                        else:
+                            args["path"] = str(resolved_path)
                 except Exception as e:
                     logger.warning(f"Error normalizing/validating path: {e}")
-                    continue
+                    rejected = True
+                    rejection_reason = f"error validating path: {str(e)}"
 
-            if self.settings.tool_emulation_validate_schema:
+            if not rejected and self.settings.tool_emulation_validate_schema:
                 if name not in tool_map:
-                    continue
-                tdef = tool_map[name]
-                params_schema = tdef.get("parameters", {})
-                req = params_schema.get("required", [])
-                props = params_schema.get("properties", {})
+                    rejected = True
+                    rejection_reason = "tool not registered"
+                else:
+                    tdef = tool_map[name]
+                    params_schema = tdef.get("parameters", {})
+                    req = params_schema.get("required", [])
+                    props = params_schema.get("properties", {})
 
-                missing = [r for r in req if r not in args]
-                if missing:
-                    continue
+                    missing = [r for r in req if r not in args]
+                    if missing:
+                        rejected = True
+                        rejection_reason = f"missing required parameters: {', '.join(missing)}"
+                    else:
+                        # Basic type and enum validation
+                        invalid = False
+                        invalid_reason = ""
+                        for k, v in args.items():
+                            if k in props:
+                                p_schema = props[k]
+                                t = p_schema.get("type")
+                                if t == "string" and not isinstance(v, str):
+                                    invalid = True
+                                    invalid_reason = f"parameter {k} must be string"
+                                elif t in ("integer", "number") and not isinstance(
+                                    v, (int, float)
+                                ):
+                                    invalid = True
+                                    invalid_reason = f"parameter {k} must be number"
+                                elif t == "boolean" and not isinstance(v, bool):
+                                    invalid = True
+                                    invalid_reason = f"parameter {k} must be boolean"
+                                elif t == "array" and not isinstance(v, list):
+                                    invalid = True
+                                    invalid_reason = f"parameter {k} must be array"
+                                elif t == "object" and not isinstance(v, dict):
+                                    invalid = True
+                                    invalid_reason = f"parameter {k} must be object"
 
-                # Basic type and enum validation
-                invalid = False
-                for k, v in args.items():
-                    if k in props:
-                        p_schema = props[k]
-                        t = p_schema.get("type")
-                        if t == "string" and not isinstance(v, str):
-                            invalid = True
-                        elif t in ("integer", "number") and not isinstance(
-                            v, (int, float)
-                        ):
-                            invalid = True
-                        elif t == "boolean" and not isinstance(v, bool):
-                            invalid = True
-                        elif t == "array" and not isinstance(v, list):
-                            invalid = True
-                        elif t == "object" and not isinstance(v, dict):
-                            invalid = True
+                                enum_vals = p_schema.get("enum")
+                                if enum_vals and v not in enum_vals:
+                                    invalid = True
+                                    invalid_reason = f"parameter {k} must be one of {enum_vals}"
 
-                        enum_vals = p_schema.get("enum")
-                        if enum_vals and v not in enum_vals:
-                            invalid = True
+                        if invalid:
+                            rejected = True
+                            rejection_reason = invalid_reason
 
-                if invalid:
-                    continue
+            if rejected:
+                rejected_tool_calls.append({
+                    "name": name,
+                    "reason": rejection_reason
+                })
+                continue
+
+            accepted_tool_calls.append({
+                "name": name,
+                "arguments": args
+            })
 
             args_str = json.dumps(args, ensure_ascii=False)
 
@@ -671,6 +801,31 @@ class ToolEmulationPipeline:
                 )
             )
 
+        self._last_parse_result = {
+            "has_sentinels": has_sentinels,
+            "raw_tool_calls": raw_tool_calls,
+            "accepted_tool_calls": accepted_tool_calls,
+            "rejected_tool_calls": rejected_tool_calls,
+            "parse_error": None,
+        }
+
+        # TOOL_PARSE_RESULT log
+        log_event("TOOL_PARSE_RESULT", {
+            "found": True,
+            "parse_error": None,
+            "tool_call_count": len(tool_calls),
+            "raw_tool_calls": raw_tool_calls,
+            "accepted_tool_calls": accepted_tool_calls,
+            "rejected_tool_calls": rejected_tool_calls,
+            "tool_calls": accepted_tool_calls
+        })
+        log_raw_event("Tool Parse", {
+            "found": True,
+            "raw_tool_calls": raw_tool_calls,
+            "accepted_tool_calls": accepted_tool_calls,
+            "rejected_tool_calls": rejected_tool_calls,
+            "tool_calls": accepted_tool_calls
+        })
         return tool_calls if tool_calls else None
 
     def _try_parse_json(self, s: str) -> Any:
@@ -727,6 +882,86 @@ class ToolEmulationPipeline:
             return True
         return bool(re.search(r"```(?:json|tool_calls)", text))
 
+    def _diagnose_tool_protocol_error(self, text: str, calls: list[ToolCall] | None) -> Tuple[bool, str, str, str, str]:
+        parse_res = getattr(self, "_last_parse_result", {})
+        has_error = False
+        category = ""
+        tool_name = "unknown"
+        exact_reason = ""
+        feedback_lines = []
+
+        if parse_res.get("parse_error") == "invalid JSON":
+            has_error = True
+            category = "malformed_tool_calls_json"
+            exact_reason = "invalid JSON"
+            feedback_lines.append(
+                "Tool protocol feedback: Invalid JSON structure in TOOL_CALLS block. "
+                "Please re-emit ONLY a corrected TOOL_CALLS block with valid JSON."
+            )
+        elif parse_res.get("rejected_tool_calls"):
+            has_error = True
+            rejected_details = parse_res.get("rejected_tool_calls")
+
+            # Check if any is "tool not registered"
+            has_unregistered = any(rc.get("reason") == "tool not registered" for rc in rejected_details)
+            if has_unregistered:
+                category = "unsupported_tool_call"
+                exact_reason = "unsupported tool"
+            else:
+                category = "schema_invalid_or_unsafe_path"
+                exact_reason = "unsupported tool, schema-invalid, or unsafe path"
+
+            for rc in rejected_details:
+                name_val = rc.get("name") or "unknown"
+                reason_val = rc.get("reason") or "unknown"
+                tool_name = name_val
+                if reason_val == "tool not registered":
+                    feedback_lines.append(
+                        f'Tool protocol feedback: Tool "{name_val}" is not available in the current route. '
+                        f'Use one of the available tools or continue without it.'
+                    )
+                else:
+                    feedback_lines.append(
+                        f'Tool protocol feedback: Tool call "{name_val}" was rejected: {reason_val}. '
+                        f'Please re-emit a corrected TOOL_CALLS block.'
+                    )
+        elif calls is None and self.has_tool_block_heuristic(text):
+            has_error = True
+            category = "malformed_tool_calls_json"
+            exact_reason = "Invalid or unsupported tool call in tool block"
+            feedback_lines.append(
+                "Tool protocol feedback: Invalid or unsupported tool call in tool block. "
+                "Please re-emit ONLY a corrected TOOL_CALLS block."
+            )
+
+        feedback_message = "\n".join(feedback_lines) if feedback_lines else ""
+        return has_error, category, tool_name, exact_reason, feedback_message
+
+    def _check_tool_protocol_error(self, text: str, calls: list[ToolCall] | None) -> Tuple[bool, str]:
+        has_error, error_category, error_tool, error_reason, feedback_message = self._diagnose_tool_protocol_error(text, calls)
+        if has_error:
+            parse_res = getattr(self, "_last_parse_result", {})
+            rejected_details = parse_res.get("rejected_tool_calls", [])
+            if rejected_details:
+                details_list = []
+                for rc in rejected_details:
+                    name_val = rc.get("name") or "unknown"
+                    reason_val = rc.get("reason") or "unknown"
+                    details_list.append(f"- Tool '{name_val}': {reason_val}")
+                details_text = "\n".join(details_list)
+            else:
+                details_text = "Invalid JSON structure. Could not parse tool calls."
+
+            error_message = (
+                "Tool protocol error: TOOL_CALLS block was detected but could not be executed.\n\n"
+                f"Reason:\n{error_reason}\n\n"
+                f"Rejected calls:\n{details_text}\n\n"
+                "Please re-emit ONLY a corrected TOOL_CALLS block, or continue without the unsupported tool.\n\n"
+                "Do not include prose outside the block if retrying."
+            )
+            return True, error_message
+        return False, ""
+
     async def execute_upstream(
         self,
         client: Any,
@@ -743,88 +978,155 @@ class ToolEmulationPipeline:
         If a tool call is parsed, executes it locally via RuntimeBridge, sends the result back,
         and returns the final text result.
         """
-        text = await client.chat(prompt, additional_context, session, tone, images)
+        from m365_copilot_openai_proxy.debug_logger import log_event, log_raw_event
+
+        attempt = 0
+        retry_limit = getattr(self.settings, "tool_emulation_protocol_error_retry_limit", 1)
+
+        # We start with the original additional_context
+        current_context = list(additional_context)
+
+        # Initial upstream call
+        text = await client.chat(prompt, current_context, session, tone, images)
+        log_event("MODEL_RECV_RAW", {
+            "status_code": 200,
+            "raw": text,
+            "chunks": [text]
+        })
+        log_raw_event("Receive", {
+            "content": text
+        })
+
         calls = self.parse_response(
             text, normalized_tools, workspace_root=workspace_root
         )
 
-        attempt = 0
-        max_retries = (
-            1 if self.settings.tool_emulation_repair_invalid_tool_call_once else 0
-        )
-        if not self.settings.injection_enabled:
-            max_retries = 0
-            if not text or not text.strip():
-                logger.debug("[DEBUG] empty response received; injection disabled; no recovery prompt injected")
+        has_error, error_category, error_tool, error_reason, feedback_message = self._diagnose_tool_protocol_error(text, calls)
 
-        while calls is None and attempt < max_retries:
-            if not text.strip():
-                retry_prompt = prompt
-            elif self.has_tool_block_heuristic(text) or self.looks_like_bypass(text):
-                retry_prompt = self.build_correction_prompt(prompt)
-            else:
-                break
+        while has_error and attempt < retry_limit:
+            # 1. Log the Tool Protocol Error (user_visible=False because we will retry internally)
+            log_payload = {
+                "event": "Tool Protocol Error",
+                "category": error_category,
+                "tool": error_tool,
+                "user_visible": False,
+                "will_retry_model": True
+            }
+            log_raw_event("Tool Protocol Error", log_payload)
+            log_event("Tool Protocol Error", log_payload)
+
+            # 2. Log the Tool Protocol Feedback Sent To Model
+            feedback_payload = {
+                "feedback": feedback_message,
+                "attempt": attempt + 1,
+                "user_visible": False
+            }
+            log_raw_event("Tool Protocol Feedback Sent To Model", feedback_payload)
+            log_event("Tool Protocol Feedback Sent To Model", feedback_payload)
+
+            # 3. Update current_context with the model's malformed/invalid turn and the feedback turn
+            current_context = list(current_context)
+            current_context.append(f"Assistant:\n{text}")
+            current_context.append(feedback_message)
 
             attempt += 1
-            text = await client.chat(retry_prompt, additional_context, session, tone)
+
+            # 4. Call the model again
+            text = await client.chat(prompt, current_context, session, tone)
+
+            # Log Tool Protocol Retry Receive
+            retry_payload = {
+                "content": text,
+                "attempt": attempt,
+                "user_visible": False
+            }
+            log_raw_event("Tool Protocol Retry Receive", retry_payload)
+            log_event("Tool Protocol Retry Receive", retry_payload)
+
+            # Log standard receive logs to keep other tracing happy
+            log_event("MODEL_RECV_RAW", {
+                "status_code": 200,
+                "raw": text,
+                "chunks": [text]
+            })
+            log_raw_event("Receive", {
+                "content": text
+            })
+
+            # 5. Parse the new response
             calls = self.parse_response(
                 text, normalized_tools, workspace_root=workspace_root
             )
 
+            # 6. Diagnose again
+            has_error, error_category, error_tool, error_reason, feedback_message = self._diagnose_tool_protocol_error(text, calls)
+
+        if has_error:
+            # We've exhausted the retry limit, and we still have an error.
+            # Now we must expose this to the user as a final fallback.
+
+            # 1. Log the final Tool Protocol Error with user_visible=True and will_retry_model=False
+            log_payload = {
+                "event": "Tool Protocol Error",
+                "category": error_category,
+                "tool": error_tool,
+                "user_visible": True,
+                "will_retry_model": False
+            }
+            log_raw_event("Tool Protocol Error", log_payload)
+            log_event("Tool Protocol Error", log_payload)
+
+            # 2. Log final Tool Return
+            final_return_payload = {
+                "format": "tool_protocol_error",
+                "error": error_reason,
+                "user_visible": True
+            }
+            log_raw_event("Tool Return", final_return_payload)
+            log_event("Tool Return", final_return_payload)
+
+            # 3. Determine final user-visible response text:
+            if error_category == "unsupported_tool_call":
+                visible_message = (
+                    "I could not complete the tool step because the requested tool is unsupported by the current runtime."
+                )
+            else:
+                visible_message = (
+                    f"Tool protocol error: TOOL_CALLS block was detected but could not be executed.\n\n"
+                    f"Reason:\n{error_reason}\n\n"
+                    f"Please re-emit ONLY a corrected TOOL_CALLS block, or continue without the tools."
+                )
+
+            return None, visible_message
+
         # Determine whether to execute locally based on the config run_mode:
         # If execution_enabled is False, or run_mode is "platform", always bypass local execution.
         run_mode = (self.settings.tool_emulation_run_mode or "auto").strip().lower()
-        
-        if self.settings.tool_emulation_execution_enabled and run_mode != "platform":
-            while calls:
-                from .runtime_bridge import RuntimeBridge
-                bridge = RuntimeBridge(
-                    root_dir=workspace_root or ".",
-                    allow_bash=not self.settings.tool_emulation_execution_sandbox
-                )
-                
-                # In "auto" mode, we only run locally if ALL parsed tool calls are supported locally.
-                # If run_mode is "local", we proceed with local execution regardless.
-                if run_mode == "auto":
-                    all_supported = True
-                    for call in calls:
-                        if call.function.name not in bridge.tools:
-                            all_supported = False
-                            break
-                            
-                    if not all_supported:
-                        logger.info("Some tool calls are not supported locally in auto mode. Returning to client platform.")
-                        break
-                    
-                logger.info(f"ReAct Loop: Executing tool calls: {calls}")
-                
-                results = []
-                for call in calls:
-                    call_dict = {
-                        "name": call.function.name,
-                        "arguments": json.loads(call.function.arguments) if isinstance(call.function.arguments, str) else call.function.arguments
-                    }
-                    res = bridge.execute_call(call_dict)
-                    results.append(res)
-                    
-                tool_result_str = "\n".join(
-                    f"Tool result [{call.function.name}]: {json.dumps(res, ensure_ascii=False)}"
-                    for call, res in zip(calls, results)
-                )
-                
-                additional_context = list(additional_context)
-                assistant_transcript = f"Assistant (tool call):\n{self._redact_tool_sentinels(text)}"
-                additional_context.append(assistant_transcript)
-                additional_context.append(f"Tool results:\n{tool_result_str}")
-                
-                text = await client.chat(prompt, additional_context, session, tone)
-                calls = self.parse_response(
-                    text, normalized_tools, workspace_root=workspace_root
-                )
 
-            if calls:
-                return calls, self._redact_tool_sentinels(text)
-            else:
-                return None, self._redact_tool_sentinels(text)
+        if self.settings.tool_emulation_execution_enabled and run_mode != "platform":
+            from emulator.tool_emulation import LocalToolEmulator
+            emulator = LocalToolEmulator(self.settings)
+            return await emulator.execute_react_loop(
+                client,
+                prompt,
+                current_context,
+                session,
+                tone,
+                normalized_tools,
+                calls,
+                text,
+                parse_response_fn=self.parse_response,
+                redact_tool_sentinels_fn=self._redact_tool_sentinels,
+                workspace_root=workspace_root,
+            )
         else:
+            # Log Tool Return
+            tool_return_payload = {
+                "format": "tool_calls",
+                "tool_calls": [c.model_dump() if hasattr(c, "model_dump") else str(c) for c in (calls or [])],
+                "user_visible": True
+            }
+            log_raw_event("Tool Return", tool_return_payload)
+            log_event("Tool Return", tool_return_payload)
+
             return calls, self._redact_tool_sentinels(text)

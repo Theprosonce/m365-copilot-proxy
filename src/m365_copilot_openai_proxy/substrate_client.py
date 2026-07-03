@@ -85,7 +85,7 @@ class SubstrateCopilotClient:
     ):
         if not access_token:
             raise SubstrateCopilotError(
-                "access_token is missing in config.ini. Start the debug Edge window and let startup token capture complete, "
+                "M365_ACCESS_TOKEN is missing in .env. Start the debug Edge window and let startup token capture complete, "
                 "or run `uv run copilot-openai-proxy set-token`."
             )
         self._token = access_token
@@ -106,7 +106,7 @@ class SubstrateCopilotClient:
             raise SubstrateCopilotError(
                 "Access token expired. To refresh: open M365 Copilot in your browser, "
                 "DevTools → Network → filter 'substrate' → click the WebSocket → Headers → "
-                "copy the access_token= query param → update access_token in config.ini"
+                "copy the access_token= query param → update M365_ACCESS_TOKEN in .env"
             )
         self._oid: str = claims["oid"]
         self._tid: str = claims["tid"]
@@ -402,8 +402,21 @@ def _combine_text(prompt: str, context: list[str]) -> str:
     # transcript/workspace dump first buries the real message and the model loses focus.)
     if not context:
         return prompt
-    return (
-        prompt
-        + "\n\n---\n# Reference context (prior conversation / workspace, for grounding only)\n\n"
-        + "\n\n".join(context)
-    )
+
+    # Extract any system instructions to place them at the very top as instructions to obey
+    system_inst = [c for c in context if c.startswith("System instructions:\n")]
+    other_ctx = [c for c in context if not c.startswith("System instructions:\n")]
+
+    parts = []
+    if system_inst:
+        parts.append("\n\n".join(system_inst))
+
+    parts.append(prompt)
+
+    if other_ctx:
+        parts.append(
+            "# Reference context (prior conversation / workspace, for grounding only)\n\n"
+            + "\n\n".join(other_ctx)
+        )
+
+    return "\n\n---\n\n".join(parts)

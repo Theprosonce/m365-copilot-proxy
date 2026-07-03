@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import configparser
+import os
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +12,8 @@ from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, Settings
 INI_CONFIG_PATHS = (
     Path('config.ini'),
 )
+ENV_PATH = Path('.env')
+ACCESS_TOKEN_ENV_KEY = 'M365_ACCESS_TOKEN'
 
 
 def _ensure_config_ini_exists() -> None:
@@ -33,9 +36,6 @@ def _ensure_config_ini_exists() -> None:
 
     # Fallback to embedded template content if template file cannot be read
     fallback_content = """[settings]
-# Microsoft 365 Copilot Substrate access token
-access_token = 
-
 # Time zone used by the proxy (default: Asia/Tokyo)
 time_zone = Asia/Tokyo
 
@@ -125,8 +125,10 @@ mode = emulation
 plugin_paths = 
 
 [prompt_injection]
-enabled = true
-injection_enabled = false
+# Canonical prompt injection gate. Keep false for passive tool emulation:
+# tools can still be parsed from model output, but no tool protocol,
+# continuation, or empty-output recovery prompt is injected.
+enabled = false
 
 [tool_emulation]
 enabled = false
@@ -151,11 +153,21 @@ allow_loose_json_recovery = false
 max_parse_chars = 20000
 validate_schema = true
 repair_invalid_tool_call_once = true
+protocol_error_retry_limit = 1
 max_agent_iterations = 1
 max_total_tool_calls = 3
 prevent_repeated_tool_calls = true
 execution_enabled = false
 execution_sandbox = true
+
+[debug]
+tooling_json_log_enabled = true
+tooling_json_log_file = logs/debug_tooling.jsonl
+tooling_json_log_max_chars = 50000
+tooling_raw_log_enabled = true
+tooling_raw_log_dir = logs
+tooling_raw_log_name_pattern = activity-{timestamp}.log
+tooling_raw_log_max_chars = 100000
 """
     try:
         target_path.write_text(fallback_content, encoding='utf-8')
@@ -199,13 +211,14 @@ def _load_ini_settings() -> dict[str, Any]:
                 if section_key and section_key != 'settings'
                 else normalized_key
             )
+            if setting_key == 'access_token':
+                continue
             values[setting_key] = _coerce_ini_value(value)
     return values
 
 
 def ini_settings_source() -> dict[str, Any]:
     import sys
-    import os
     if "pytest" in sys.modules or os.environ.get("PYTEST_CURRENT_TEST"):
         config_path = os.path.abspath("config.ini")
         project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -216,6 +229,8 @@ def ini_settings_source() -> dict[str, Any]:
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
+        env_file=str(ENV_PATH),
+        env_file_encoding="utf-8",
         extra="ignore",
         populate_by_name=True,
     )
@@ -231,10 +246,12 @@ class Settings(BaseSettings):
     ) -> tuple[Any, ...]:
         return (
             init_settings,
+            env_settings,
+            dotenv_settings,
             ini_settings_source,
         )
 
-    access_token: str = Field(default="")
+    access_token: str = Field(default="", alias=ACCESS_TOKEN_ENV_KEY)
     time_zone: str = Field(default="Asia/Tokyo")
     model_alias: str = Field(default="m365-copilot")
     # True -> agent=work (enterprise grounding); False -> agent=web (no work grounding).
@@ -262,6 +279,27 @@ class Settings(BaseSettings):
     session_salt: str = Field(default="")
     debug: bool = Field(default=False)
     timing: bool = Field(default=False)
+    debug_tooling_json_log_enabled: bool = Field(
+        default=True, alias="M365_DEBUG_TOOLING_JSON_LOG_ENABLED"
+    )
+    debug_tooling_json_log_file: str = Field(
+        default="logs/debug_tooling.jsonl", alias="M365_DEBUG_TOOLING_JSON_LOG_FILE"
+    )
+    debug_tooling_json_log_max_chars: int = Field(
+        default=50000, alias="M365_DEBUG_TOOLING_JSON_LOG_MAX_CHARS"
+    )
+    debug_tooling_raw_log_enabled: bool = Field(
+        default=True, alias="M365_DEBUG_TOOLING_RAW_LOG_ENABLED"
+    )
+    debug_tooling_raw_log_dir: str = Field(
+        default="logs", alias="M365_DEBUG_TOOLING_RAW_LOG_DIR"
+    )
+    debug_tooling_raw_log_name_pattern: str = Field(
+        default="activity-{timestamp}.log", alias="M365_DEBUG_TOOLING_RAW_LOG_NAME_PATTERN"
+    )
+    debug_tooling_raw_log_max_chars: int = Field(
+        default=100000, alias="M365_DEBUG_TOOLING_RAW_LOG_MAX_CHARS"
+    )
     substrate_config_path: str = Field(default="")
     prompt_catalog_path: str = Field(default="")
     tool_emulation_injection_path: str = Field(default="")
@@ -333,11 +371,11 @@ class Settings(BaseSettings):
     )
 
     # Prompt Injection Policy
+    # Canonical gate from [prompt_injection].enabled / M365_PROMPT_INJECTION_ENABLED.
+    # False keeps passive tool emulation enabled without injecting tool,
+    # continuation, or empty-output recovery prompts.
     prompt_injection_enabled: bool = Field(
-        default=True, alias="M365_PROMPT_INJECTION_ENABLED"
-    )
-    injection_enabled: bool = Field(
-        default=False, alias="M365_INJECTION_ENABLED"
+        default=False, alias="M365_PROMPT_INJECTION_ENABLED"
     )
 
     # Tool Emulation Policy
@@ -419,6 +457,9 @@ class Settings(BaseSettings):
     tool_emulation_execution_sandbox: bool = Field(
         default=True, alias="M365_TOOL_EMULATION_EXECUTION_SANDBOX"
     )
+    tool_emulation_protocol_error_retry_limit: int = Field(
+        default=1, alias="M365_TOOL_EMULATION_PROTOCOL_ERROR_RETRY_LIMIT"
+    )
 
 
 def _field_name_for_config_key(key: str) -> str:
@@ -430,19 +471,67 @@ def _field_name_for_config_key(key: str) -> str:
     return normalized.lower().removeprefix('m365_')
 
 
+def _read_env_file_value(key: str) -> str | None:
+    try:
+        for line in ENV_PATH.read_text(encoding='utf-8').splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith('#') or '=' not in stripped:
+                continue
+            name, raw_value = stripped.split('=', 1)
+            if name.strip() == key:
+                return _coerce_env_value(raw_value)
+    except FileNotFoundError:
+        return None
+    return None
+
+
+def _coerce_env_value(value: str) -> str:
+    text = value.strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in {"'", '"'}:
+        return text[1:-1]
+    return text
+
+
+def _write_env_file_value(key: str, value: str) -> None:
+    lines = []
+    replaced = False
+    try:
+        lines = ENV_PATH.read_text(encoding='utf-8').splitlines()
+    except FileNotFoundError:
+        pass
+    for idx, line in enumerate(lines):
+        if line.strip().startswith('#') or '=' not in line:
+            continue
+        name, _raw_value = line.split('=', 1)
+        if name.strip() == key:
+            lines[idx] = f'{key}={value}'
+            replaced = True
+            break
+    if not replaced:
+        lines.append(f'{key}={value}')
+    ENV_PATH.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+
+
 def read_config_value(key: str) -> str | None:
+    field_name = _field_name_for_config_key(key)
+    if field_name == 'access_token':
+        return os.environ.get(ACCESS_TOKEN_ENV_KEY) or _read_env_file_value(ACCESS_TOKEN_ENV_KEY)
     values = _load_ini_settings()
-    value = values.get(_field_name_for_config_key(key))
+    value = values.get(field_name)
     return None if value is None else str(value)
 
 
 def write_config_value(key: str, value: str, section: str = 'settings') -> None:
+    field_name = _field_name_for_config_key(key)
+    if field_name == 'access_token':
+        _write_env_file_value(ACCESS_TOKEN_ENV_KEY, value)
+        return
     _ensure_config_ini_exists()
     path = INI_CONFIG_PATHS[0]
     parser = configparser.ConfigParser()
     parser.read(path, encoding='utf-8')
     if not parser.has_section(section):
         parser.add_section(section)
-    parser.set(section, _field_name_for_config_key(key), value)
+    parser.set(section, field_name, value)
     with path.open('w', encoding='utf-8') as f:
         parser.write(f)

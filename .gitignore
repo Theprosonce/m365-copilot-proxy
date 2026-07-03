@@ -28,6 +28,8 @@ dist/
 # Log files
 *.log
 logs/
+debug_tooling*.log
+debug_tooling*.jsonl
 
 # Test temp workspaces
 temp/

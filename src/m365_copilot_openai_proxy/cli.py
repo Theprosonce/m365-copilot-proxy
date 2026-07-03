@@ -262,7 +262,7 @@ def _startup_capture_loop(cdp_port: int, timeout_seconds: int) -> None:
         "If needed: press F5 in Copilot, click the message box, and type one character."
     )
     if _capture_token_to_env(cdp_port, timeout_seconds):
-        print("config.ini updated with Substrate token.")
+        print(".env updated with Substrate token.")
         _close_debug_browser(cdp_port)
     else:
         print("Startup token capture timed out. Manual set-token is still available.")
@@ -531,7 +531,7 @@ def main() -> None:
     subparsers = parser.add_subparsers(dest="command", required=False)
 
     subparsers.add_parser(
-        "set-token", help="paste a substrate access token or WebSocket URL into config.ini"
+        "set-token", help="paste a substrate access token or WebSocket URL into .env"
     ).set_defaults(func=set_token_command)
     capture_parser = subparsers.add_parser(
         "capture-token", help="listen for a substrate token via Edge CDP"
@@ -803,7 +803,7 @@ def set_token_command(_args) -> None:
         )
         return
     _write_token(token)
-    print("config.ini updated.")
+    print(".env updated.")
 
 
 def capture_token_command(args: argparse.Namespace) -> None:
@@ -818,7 +818,7 @@ def capture_token_command(args: argparse.Namespace) -> None:
         print("Error: no Substrate WebSocket token captured before timeout.")
         return
     _write_token(token)
-    print("config.ini updated with Substrate token.")
+    print(".env updated with Substrate token.")
     _close_debug_browser(args.cdp_port)
 
 
