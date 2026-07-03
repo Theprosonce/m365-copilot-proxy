@@ -2,11 +2,12 @@
 # Run the proxy FROM SOURCE — no .exe needed (Linux, or any box without the signed binary).
 #
 # Usage:
-#   ./run.sh            # tray GUI (bare invocation; needs a desktop + python3-tk)
-#   ./run.sh serve      # headless OpenAI/Anthropic API
-#   ./run.sh serve --no-launch-edge
+#   ./scripts/run.sh            # tray GUI (bare invocation; needs a desktop + python3-tk)
+#   ./scripts/run.sh serve      # headless OpenAI/Anthropic API
+#   ./scripts/run.sh serve --no-launch-edge
 set -euo pipefail
-cd "$(dirname "$0")"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
 
 if command -v uv >/dev/null 2>&1; then
     uv sync

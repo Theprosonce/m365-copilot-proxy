@@ -3,8 +3,8 @@
 # Counterpart of proxy.ps1 on Windows.
 #
 # Usage:
-#   ./proxy.sh            # toggle on/off
-#   ./proxy.sh --reinstall # force a fresh `pip install -e .` then start
+#   ./scripts/proxy.sh            # toggle on/off
+#   ./scripts/proxy.sh --reinstall # force a fresh `pip install -e .` then start
 #
 # Detects listener on :8000; if active, kills proxy processes; otherwise
 # ensures .venv + editable install and starts the headless server in background.
@@ -13,7 +13,8 @@
 # Windows, so running from source via the venv is the simplest path. For an
 # interactive (foreground, tray/serve) run, use run.sh instead.
 set -euo pipefail
-cd "$(dirname "$0")"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
 
 PORT=8000
 REINSTALL=0

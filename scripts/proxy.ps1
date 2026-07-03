@@ -1,8 +1,8 @@
 # Unified build + toggle script for the M365 Copilot proxy.
 #
 # Replaces proxy-toggle.bat. One command:
-#   .\proxy.ps1               # toggle on/off; build-if-missing before the first start
-#   .\proxy.ps1 -ForceBuild   # rebuild dist\m365-copilot-proxy.exe even if it exists, then start
+#   .\scripts\proxy.ps1               # toggle on/off; build-if-missing before the first start
+#   .\scripts\proxy.ps1 -ForceBuild   # rebuild dist\m365-copilot-proxy.exe even if it exists, then start
 #
 # What it does (when NOT running):
 #   1. ensure .venv exists (needed by PyInstaller in packaging\build-exe.ps1)
@@ -23,11 +23,12 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-Set-Location $PSScriptRoot
+$Root = Resolve-Path (Join-Path $PSScriptRoot "..")
+Set-Location $Root
 
 $port    = 8000
 $exeRel  = "dist\m365-copilot-proxy.exe"
-$exe     = Join-Path $PSScriptRoot $exeRel
+$exe     = Join-Path $Root $exeRel
 
 # --- 1. detect listener on :PORT ---------------------------------------------
 $active = $false
@@ -74,8 +75,8 @@ if ((-not (Test-Path $exe)) -or $ForceBuild) {
 # The exe is --windowed (no console subsystem). Without -RedirectStandardOutput/Error any startup
 # crash dies silently and we can't tell whether `serve` is actually listening. So we capture both
 # streams to proxy.log / proxy.err.log and *poll netstat* until the listener binds (or time out).
-$logOut = Join-Path $PSScriptRoot "proxy.log"
-$logErr = Join-Path $PSScriptRoot "proxy.err.log"
+$logOut = Join-Path $Root "proxy.log"
+$logErr = Join-Path $Root "proxy.err.log"
 # truncate previous run so the dump-on-fail only shows current attempt
 "" | Set-Content -Path $logOut -Encoding utf8
 "" | Set-Content -Path $logErr -Encoding utf8
@@ -85,7 +86,7 @@ $env:M365_TIME_ZONE      = "Europe/Rome"
 $env:M365_WORK_GROUNDING = "false"
 $env:M365_DEBUG          = "1"
 $proc = Start-Process -FilePath $exe -ArgumentList "serve" `
-    -WorkingDirectory $PSScriptRoot `
+    -WorkingDirectory $Root `
     -RedirectStandardOutput $logOut -RedirectStandardError $logErr `
     -PassThru
 

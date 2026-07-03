@@ -29,14 +29,14 @@ One-command setup scripts install `uv` if needed, install dependencies, then sta
 
 ```powershell
 # Windows
-powershell -ExecutionPolicy Bypass -File .\setup\setup.ps1 serve
+powershell -ExecutionPolicy Bypass -File .\scripts\setup.ps1 serve
 # or
-setup\setup.bat serve
+scripts\setup.bat serve
 ```
 
 ```bash
 # Linux
-./setup/setup.sh serve
+./scripts/setup.sh serve
 ```
 
 If you already have `uv` installed, the equivalent manual commands are:
@@ -68,13 +68,13 @@ Use this on machines where the signed release binaries are blocked by Applicatio
 
 ```powershell
 # clone, then from the repo root:
-powershell -ExecutionPolicy Bypass -File .\run.ps1            # tray GUI (bare invocation)
-powershell -ExecutionPolicy Bypass -File .\run.ps1 serve      # headless API
+powershell -ExecutionPolicy Bypass -File .\scripts\run.ps1            # tray GUI (bare invocation)
+powershell -ExecutionPolicy Bypass -File .\scripts\run.ps1 serve      # headless API
 ```
 
 ```bash
-./run.sh            # tray GUI (needs a desktop + python3-tk)
-./run.sh serve      # headless API
+./scripts/run.sh            # tray GUI (needs a desktop + python3-tk)
+./scripts/run.sh serve      # headless API
 ```
 
 The scripts use `uv` when available, otherwise fall back to a local `.venv` + `pip install -e .`. Equivalent one-liners without the scripts:
@@ -87,7 +87,7 @@ python -m m365_copilot_openai_proxy serve
 
 ### Project layout
 
-Top-level files are kept for common entry points (`README.md`, `pyproject.toml`, `run.*`, `proxy.*`). Build and installer internals live in `packaging/`, user setup helpers live in `setup/`, docs live in `docs/`.
+Top-level files are kept for project metadata and documentation (`README.md`, `pyproject.toml`). Runtime, setup, and helper entry points live in `scripts/`, build and installer internals live in `packaging/`, and docs live in `docs/`.
 
 ### Build / toggle scripts
 
@@ -96,24 +96,24 @@ the runtime is in place before the first start.
 
 | Script | OS | Purpose |
 |---|---|---|
-| `setup/setup.ps1` / `setup/setup.bat` | Windows | First-run quick start: install `uv` if missing, run `uv sync`, then start the proxy. |
-| `setup/setup.sh` | Linux | First-run quick start: install `uv` if missing, run `uv sync`, then start the proxy. |
-| `proxy.ps1` *(recommended on Windows)* | Windows | Toggle on/off; build the standalone exe if missing, then start it headless. `.\proxy.ps1` toggles, `.\proxy.ps1 -ForceBuild` rebuilds first. Locally built → no Mark-of-the-Web → no SmartScreen prompt. |
-| `proxy.sh` *(recommended on macOS / Linux)* | macOS / Linux | Toggle on/off; create the `.venv` + editable install on first start, then run headless from source in background. `./proxy.sh --reinstall` forces a fresh `pip install -e .`. |
-| `proxy-toggle.bat` | Windows | Simple toggle on/off of the venv console script. No build step — assumes `.venv` is already set up. |
-| `packaging/build-exe.ps1` | Windows | Explicit PyInstaller build of `dist\m365-copilot-proxy.exe`, self-signed. Called automatically by `proxy.ps1` when the exe is missing. |
-| `run.ps1` / `run.sh` | All | Foreground run from source (tray GUI or `serve`). Use these for dev, not for "fire and forget". |
+| `scripts/setup.ps1` / `scripts/setup.bat` | Windows | First-run quick start: install `uv` if missing, run `uv sync`, then start the proxy. |
+| `scripts/setup.sh` | Linux | First-run quick start: install `uv` if missing, run `uv sync`, then start the proxy. |
+| `scripts/proxy.ps1` *(recommended on Windows)* | Windows | Toggle on/off; build the standalone exe if missing, then start it headless. `.\scripts\proxy.ps1` toggles, `.\scripts\proxy.ps1 -ForceBuild` rebuilds first. Locally built → no Mark-of-the-Web → no SmartScreen prompt. |
+| `scripts/proxy.sh` *(recommended on macOS / Linux)* | macOS / Linux | Toggle on/off; create the `.venv` + editable install on first start, then run headless from source in background. `./scripts/proxy.sh --reinstall` forces a fresh `pip install -e .`. |
+| `scripts/proxy-toggle.bat` | Windows | Simple toggle on/off of the venv console script. No build step — assumes `.venv` is already set up. |
+| `packaging/build-exe.ps1` | Windows | Explicit PyInstaller build of `dist\m365-copilot-proxy.exe`, self-signed. Called automatically by `scripts/proxy.ps1` when the exe is missing. |
+| `scripts/run.ps1` / `scripts/run.sh` | All | Foreground run from source (tray GUI or `serve`). Use these for dev, not for "fire and forget". |
 
 ```powershell
 # Windows
-powershell -ExecutionPolicy Bypass -File .\proxy.ps1              # toggle
-powershell -ExecutionPolicy Bypass -File .\proxy.ps1 -ForceBuild  # rebuild + start
+powershell -ExecutionPolicy Bypass -File .\scripts\proxy.ps1              # toggle
+powershell -ExecutionPolicy Bypass -File .\scripts\proxy.ps1 -ForceBuild  # rebuild + start
 ```
 
 ```bash
 # macOS / Linux
-./proxy.sh              # toggle
-./proxy.sh --reinstall  # refresh editable install + start
+./scripts/proxy.sh              # toggle
+./scripts/proxy.sh --reinstall  # refresh editable install + start
 ```
 
 ## Test It
@@ -187,28 +187,28 @@ Windows Setup:
 
 - **Add/update** the provider:
   ```cmd
-  setup\opencode.bat
+  scripts\opencode.bat
   ```
   or
   ```powershell
-  .\setup\opencode.ps1
+  .\scripts\opencode.ps1
   ```
 
 - **Remove** the provider:
   ```cmd
-  setup\opencode.bat --remove
+  scripts\opencode.bat --remove
   ```
   or
   ```powershell
-  .\setup\opencode.ps1 --remove
+  .\scripts\opencode.ps1 --remove
   ```
 
 Config location: `%USERPROFILE%\.config\opencode\opencode.json`
 
 Linux Setup:
 ```bash
-chmod +x setup/opencode.sh
-./setup/opencode.sh
+chmod +x scripts/opencode.sh
+./scripts/opencode.sh
 opencode
 ```
 

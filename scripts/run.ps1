@@ -2,11 +2,12 @@
 # Control blocks the downloaded binaries; pulled source has no Mark-of-the-Web).
 #
 # Usage:
-#   powershell -ExecutionPolicy Bypass -File .\run.ps1            # tray GUI (bare invocation)
-#   powershell -ExecutionPolicy Bypass -File .\run.ps1 serve      # headless OpenAI/Anthropic API
-#   powershell -ExecutionPolicy Bypass -File .\run.ps1 serve --no-launch-edge
+#   powershell -ExecutionPolicy Bypass -File .\scripts\run.ps1            # tray GUI (bare invocation)
+#   powershell -ExecutionPolicy Bypass -File .\scripts\run.ps1 serve      # headless OpenAI/Anthropic API
+#   powershell -ExecutionPolicy Bypass -File .\scripts\run.ps1 serve --no-launch-edge
 $ErrorActionPreference = "Stop"
-Set-Location $PSScriptRoot
+$Root = Resolve-Path (Join-Path $PSScriptRoot "..")
+Set-Location $Root
 
 if (Get-Command uv -ErrorAction SilentlyContinue) {
     uv sync

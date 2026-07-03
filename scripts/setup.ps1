@@ -2,9 +2,9 @@
 .SYNOPSIS
     Install uv if needed, install this project, then start the proxy.
 .EXAMPLE
-    powershell -ExecutionPolicy Bypass -File .\setup\setup.ps1
-    powershell -ExecutionPolicy Bypass -File .\setup\setup.ps1 serve
-    powershell -ExecutionPolicy Bypass -File .\setup\setup.ps1 serve --no-launch-edge
+    powershell -ExecutionPolicy Bypass -File .\scripts\setup.ps1
+    powershell -ExecutionPolicy Bypass -File .\scripts\setup.ps1 serve
+    powershell -ExecutionPolicy Bypass -File .\scripts\setup.ps1 serve --no-launch-edge
 #>
 $ErrorActionPreference = "Stop"
 
