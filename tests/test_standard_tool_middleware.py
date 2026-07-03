@@ -4,14 +4,14 @@ import json
 
 from m365_copilot_openai_proxy.config import Settings
 from m365_copilot_openai_proxy.models import AnthropicMessagesRequest, OpenAIChatRequest, OpenAIMessage
-from middleware.adapters import (
+from m365_copilot_openai_proxy.middleware.adapters import (
     anthropic_tools_to_standard,
     openai_tools_to_standard,
     standard_tool_call_to_anthropic,
     standard_tool_call_to_openai,
 )
-from middleware.models import StandardFunctionCall, StandardToolCall
-from middleware.pipeline import ToolMiddlewarePipeline
+from m365_copilot_openai_proxy.middleware.models import StandardFunctionCall, StandardToolCall
+from m365_copilot_openai_proxy.middleware.pipeline import ToolMiddlewarePipeline
 
 
 def test_openai_tools_round_trip_preserves_response_shape() -> None:

@@ -20,9 +20,8 @@ def load_substrate_config() -> dict[str, Any]:
     if configured:
         text = Path(configured).read_text(encoding="utf-8")
     else:
-        text = (
-            resources.files(__package__)
-            .joinpath("substrate.json")
-            .read_text(encoding="utf-8")
-        )
+        packaged = resources.files(__package__).joinpath("substrate.json")
+        dev_config = Path(__file__).parents[2] / "config" / "substrate.json"
+        source = dev_config if dev_config.exists() else packaged
+        text = source.read_text(encoding="utf-8")
     return json.loads(text)

@@ -21,11 +21,10 @@ def _ensure_config_ini_exists() -> None:
     if target_path.exists():
         return
 
-    # Try to find the template file
+    # Try to find the installed package template first, then the canonical dev template.
     template_path = Path(__file__).parent / 'config.ini.template'
     if not template_path.exists():
-        # Also check project root (for dev environments)
-        template_path = Path(__file__).parents[2] / 'config.ini.template'
+        template_path = Path(__file__).parents[2] / 'config' / 'config.ini.template'
 
     if template_path.exists():
         try:
