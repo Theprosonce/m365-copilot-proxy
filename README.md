@@ -6,7 +6,7 @@ This project runs a local FastAPI proxy that talks to the same `substrate.office
 
 No Azure app registration. No admin consent. Sign in with your normal M365 Copilot browser session.
 
-> Fork of [kuchris/m365-copilot-openai-proxy](https://github.com/kuchris/m365-copilot-openai-proxy), extended with a model picker, vision, protocol-neutral tool translation, temporary chats, and a session-management API.
+Extended with a model picker, vision, protocol-neutral tool translation, temporary chats, and a session-management API.
 
 ## Why Use This
 
@@ -493,4 +493,7 @@ See [docs/TOKEN_REFRESH.md](docs/TOKEN_REFRESH.md) for the deeper browser CDP re
 
 ## Credits
 
-This is a fork of [kuchris/m365-copilot-openai-proxy](https://github.com/kuchris/m365-copilot-openai-proxy), which provides the token capture, WebSocket bridge, and OpenAI/Anthropic-compatible output this build extends.
+Original fork of [kuchris/m365-copilot-openai-proxy](https://github.com/kuchris/m365-copilot-openai-proxy), which provides the token capture, WebSocket bridge, and OpenAI/Anthropic-compatible output this build extends.
+
+Thanks to fork [MassimilianoPili/m365-copilot-proxy](https://github.com/MassimilianoPili/m365-copilot-proxy),
+that provides model selection, vision, tool-calling shim, temporary chats, and a session-management API.
