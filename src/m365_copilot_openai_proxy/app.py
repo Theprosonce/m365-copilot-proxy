@@ -942,30 +942,68 @@ async def _openai_stream(
         ],
     }
     yield f"data: {json.dumps(first_chunk)}\n\n"
+    full_text = ""
     try:
         async for delta in client.chat_stream(
             prompt, additional_context, session, tone, images
         ):
+            full_text += delta
+    except SubstrateCopilotError as exc:
+        yield f"data: {json.dumps({'error': {'message': str(exc), 'type': 'upstream_error'}})}\n\n"
+        yield "data: [DONE]\n\n"
+        return
+
+    pipeline = ToolMiddlewarePipeline()
+    calls, text = pipeline.tool_calls_from_text(full_text)
+    if calls:
+        for tool_index, call in enumerate(calls):
+            call_chunk = {
+                "id": completion_id,
+                "object": "chat.completion.chunk",
+                "created": created,
+                "model": model_alias,
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": tool_index,
+                                    "id": call.id,
+                                    "type": "function",
+                                    "function": {
+                                        "name": call.function.name,
+                                        "arguments": call.function.arguments,
+                                    },
+                                }
+                            ]
+                        },
+                        "finish_reason": None,
+                    }
+                ],
+            }
+            yield f"data: {json.dumps(call_chunk)}\n\n"
+        final_reason = "tool_calls"
+    else:
+        if text:
             chunk = {
                 "id": completion_id,
                 "object": "chat.completion.chunk",
                 "created": created,
                 "model": model_alias,
                 "choices": [
-                    {"index": 0, "delta": {"content": delta}, "finish_reason": None}
+                    {"index": 0, "delta": {"content": text}, "finish_reason": None}
                 ],
             }
             yield f"data: {json.dumps(chunk)}\n\n"
-    except SubstrateCopilotError as exc:
-        yield f"data: {json.dumps({'error': {'message': str(exc), 'type': 'upstream_error'}})}\n\n"
-        yield "data: [DONE]\n\n"
-        return
+        final_reason = "stop"
+
     final_chunk = {
         "id": completion_id,
         "object": "chat.completion.chunk",
         "created": created,
         "model": model_alias,
-        "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+        "choices": [{"index": 0, "delta": {}, "finish_reason": final_reason}],
     }
     yield f"data: {json.dumps(final_chunk)}\n\n"
     yield "data: [DONE]\n\n"
@@ -984,8 +1022,6 @@ async def _responses_stream(
     created = int(time.time())
 
     yield f"data: {json.dumps({'type': 'response.created', 'response': {'id': resp_id, 'object': 'response', 'created_at': created, 'model': model_alias, 'status': 'in_progress', 'output': []}})}\n\n"
-    yield f"data: {json.dumps({'type': 'response.output_item.added', 'output_index': 0, 'item': {'id': item_id, 'type': 'message', 'role': 'assistant', 'content': []}})}\n\n"
-    yield f"data: {json.dumps({'type': 'response.content_part.added', 'item_id': item_id, 'output_index': 0, 'content_index': 0, 'part': {'type': 'output_text', 'text': ''}})}\n\n"
 
     full_text = ""
     try:
@@ -993,13 +1029,25 @@ async def _responses_stream(
             prompt, additional_context, session, tone
         ):
             full_text += delta
-            yield f"data: {json.dumps({'type': 'response.output_text.delta', 'item_id': item_id, 'output_index': 0, 'content_index': 0, 'delta': delta})}\n\n"
     except SubstrateCopilotError as exc:
         yield f"data: {json.dumps({'type': 'error', 'error': {'message': str(exc), 'type': 'upstream_error'}})}\n\n"
         return
 
-    yield f"data: {json.dumps({'type': 'response.output_text.done', 'item_id': item_id, 'output_index': 0, 'content_index': 0, 'text': full_text})}\n\n"
-    yield f"data: {json.dumps({'type': 'response.completed', 'response': {'id': resp_id, 'object': 'response', 'created_at': created, 'model': model_alias, 'status': 'completed', 'output': [{'id': item_id, 'type': 'message', 'role': 'assistant', 'content': [{'type': 'output_text', 'text': full_text}]}], 'usage': {'input_tokens': 0, 'output_tokens': 0, 'total_tokens': 0}}})}\n\n"
+    pipeline = ToolMiddlewarePipeline()
+    calls, text = pipeline.tool_calls_from_text(full_text)
+    if calls:
+        output = _responses_output_from_tool_calls(calls)
+        for index, item in enumerate(output):
+            yield f"data: {json.dumps({'type': 'response.output_item.added', 'output_index': index, 'item': item})}\n\n"
+        yield f"data: {json.dumps({'type': 'response.completed', 'response': {'id': resp_id, 'object': 'response', 'created_at': created, 'model': model_alias, 'status': 'completed', 'output': output, 'usage': {'input_tokens': 0, 'output_tokens': 0, 'total_tokens': 0}}})}\n\n"
+        return
+
+    yield f"data: {json.dumps({'type': 'response.output_item.added', 'output_index': 0, 'item': {'id': item_id, 'type': 'message', 'role': 'assistant', 'content': []}})}\n\n"
+    yield f"data: {json.dumps({'type': 'response.content_part.added', 'item_id': item_id, 'output_index': 0, 'content_index': 0, 'part': {'type': 'output_text', 'text': ''}})}\n\n"
+    if text:
+        yield f"data: {json.dumps({'type': 'response.output_text.delta', 'item_id': item_id, 'output_index': 0, 'content_index': 0, 'delta': text})}\n\n"
+    yield f"data: {json.dumps({'type': 'response.output_text.done', 'item_id': item_id, 'output_index': 0, 'content_index': 0, 'text': text})}\n\n"
+    yield f"data: {json.dumps({'type': 'response.completed', 'response': {'id': resp_id, 'object': 'response', 'created_at': created, 'model': model_alias, 'status': 'completed', 'output': [{'id': item_id, 'type': 'message', 'role': 'assistant', 'content': [{'type': 'output_text', 'text': text}]}], 'usage': {'input_tokens': 0, 'output_tokens': 0, 'total_tokens': 0}}})}\n\n"
 
 
 async def _anthropic_stream(
@@ -1059,14 +1107,6 @@ async def _anthropic_stream(
                 "chunk": delta
             })
             chunk_index += 1
-            yield sse(
-                "content_block_delta",
-                {
-                    "type": "content_block_delta",
-                    "index": 0,
-                    "delta": {"type": "text_delta", "text": delta},
-                },
-            )
         print(f"<- RECV: {full_text}", flush=True)
 
         # 5. Raw response
@@ -1079,20 +1119,23 @@ async def _anthropic_stream(
             "content": full_text
         })
 
+        pipeline = ToolMiddlewarePipeline()
+        calls, text = pipeline.tool_calls_from_text(full_text)
+
         # 6. Extracted assistant text
         log_event("MODEL_RECV_EXTRACTED", {
-            "text": full_text,
-            "text_len": len(full_text),
-            "content_block_count": 1 if full_text.strip() else 0,
-            "tool_use_block_count": 0,
+            "text": text,
+            "text_len": len(text),
+            "content_block_count": 1 if text.strip() else 0,
+            "tool_use_block_count": len(calls) if calls else 0,
             "reasoning_block_count": 0
         })
         log_raw_event("Extracted Text", {
-            "text": full_text
+            "text": text
         })
 
         # 7. Empty response decision
-        if not full_text or not full_text.strip():
+        if not text or not text.strip():
             log_event("EMPTY_RESPONSE_DECISION", {
                                 "recovery_applied": False,
                 "continuation_added": False,
@@ -1102,6 +1145,32 @@ async def _anthropic_stream(
                 "empty": True,
                 "reason": "stream returned empty content"
             })
+
+        if calls:
+            if text.strip():
+                yield sse("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}})
+                yield sse("content_block_stop", {"type": "content_block_stop", "index": 0})
+                start_index = 1
+            else:
+                start_index = 0
+            for offset, call in enumerate(calls):
+                index = start_index + offset
+                yield sse("content_block_start", {"type": "content_block_start", "index": index, "content_block": {"type": "tool_use", "id": call.id, "name": call.function.name, "input": {}}})
+                yield sse("content_block_delta", {"type": "content_block_delta", "index": index, "delta": {"type": "input_json_delta", "partial_json": call.function.arguments}})
+                yield sse("content_block_stop", {"type": "content_block_stop", "index": index})
+            yield sse("message_delta", {"type": "message_delta", "delta": {"stop_reason": "tool_use", "stop_sequence": None}, "usage": {"output_tokens": 0}})
+            yield sse("message_stop", {"type": "message_stop"})
+            return
+
+        if text:
+            yield sse(
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "text_delta", "text": text},
+                },
+            )
 
     except SubstrateCopilotError as exc:
         log_event("MODEL_RECV_RAW", {

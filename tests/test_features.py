@@ -67,6 +67,8 @@ class FakeCopilotClient:
         self.calls: list[tuple[str, list[str]]] = []
         self.sessions: list[object | None] = []
         self.images: list[object] = []
+        self.reply = "reply"
+        self.stream_chunks = ["x"]
 
     async def chat(
         self, prompt, additional_context, session=None, tone=None, images=None
@@ -74,7 +76,7 @@ class FakeCopilotClient:
         self.calls.append((prompt, additional_context))
         self.sessions.append(session)
         self.images.append(images)
-        return "reply"
+        return self.reply
 
     async def chat_stream(
         self, prompt, additional_context, session=None, tone=None, images=None
@@ -82,7 +84,8 @@ class FakeCopilotClient:
         self.calls.append((prompt, additional_context))
         self.sessions.append(session)
         self.images.append(images)
-        yield "x"
+        for chunk in self.stream_chunks:
+            yield chunk
 
 
 def _client(
@@ -336,6 +339,135 @@ def test_chat_forwards_resolved_file_attachment_image(tmp_path) -> None:
     assert fake.images[-1] is not None
     assert isinstance(fake.images[-1][0], ExtractedImage)
     assert fake.images[-1][0].file_name == "pic.png"
+
+
+# --- streamed TOOL_CALL blocks become native client tool events ---
+
+
+def _tool_call_block() -> str:
+    return '<<<TOOL_CALLS>>>\n[{"id":"call_fixed","name":"Read","arguments":{"file_path":"README.md"}}]\n<<<END_TOOL_CALLS>>>'
+
+
+def _sse_data(resp) -> list[dict]:
+    events: list[dict] = []
+    for line in resp.text.splitlines():
+        if not line.startswith("data: "):
+            continue
+        raw = line.removeprefix("data: ")
+        if raw == "[DONE]":
+            continue
+        events.append(json.loads(raw))
+    return events
+
+
+def test_chat_stream_tool_call_block_becomes_openai_tool_call(tmp_path) -> None:
+    fake = FakeCopilotClient()
+    fake.stream_chunks = [_tool_call_block()]
+    client = _client(fake, tmp_path / "s.db")
+    resp = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "m365-opus",
+            "stream": True,
+            "messages": [{"role": "user", "content": "read README"}],
+            "tools": [{"type": "function", "function": {"name": "Read"}}],
+        },
+    )
+
+    assert resp.status_code == 200
+    events = _sse_data(resp)
+    tool_delta = next(e for e in events if e["choices"][0]["delta"].get("tool_calls"))
+    call = tool_delta["choices"][0]["delta"]["tool_calls"][0]
+    assert call["id"] == "call_fixed"
+    assert call["type"] == "function"
+    assert call["function"]["name"] == "Read"
+    assert json.loads(call["function"]["arguments"]) == {"file_path": "README.md"}
+    assert events[-1]["choices"][0]["finish_reason"] == "tool_calls"
+
+
+def test_responses_stream_tool_call_block_becomes_function_call_item(tmp_path) -> None:
+    fake = FakeCopilotClient()
+    fake.stream_chunks = [_tool_call_block()]
+    client = _client(fake, tmp_path / "s.db")
+    resp = client.post(
+        "/v1/responses",
+        json={
+            "model": "m365-opus",
+            "stream": True,
+            "input": "read README",
+            "tools": [{"type": "function", "function": {"name": "Read"}}],
+        },
+    )
+
+    assert resp.status_code == 200
+    events = _sse_data(resp)
+    item = next(e["item"] for e in events if e["type"] == "response.output_item.added")
+    assert item["type"] == "function_call"
+    assert item["call_id"] == "call_fixed"
+    assert item["name"] == "Read"
+    assert json.loads(item["arguments"]) == {"file_path": "README.md"}
+    completed = next(e for e in events if e["type"] == "response.completed")
+    assert completed["response"]["output"] == [item]
+
+
+def test_anthropic_stream_tool_call_block_becomes_tool_use(tmp_path) -> None:
+    fake = FakeCopilotClient()
+    fake.stream_chunks = [_tool_call_block()]
+    client = _client(fake, tmp_path / "s.db")
+    resp = client.post(
+        "/v1/messages",
+        json={
+            "model": "m365-opus",
+            "stream": True,
+            "max_tokens": 256,
+            "messages": [{"role": "user", "content": "read README"}],
+            "tools": [{"name": "Read", "input_schema": {"type": "object"}}],
+        },
+    )
+
+    assert resp.status_code == 200
+    events = _sse_data(resp)
+    start = next(
+        e for e in events
+        if e["type"] == "content_block_start"
+        and e["content_block"]["type"] == "tool_use"
+    )
+    assert start["content_block"]["id"] == "call_fixed"
+    assert start["content_block"]["name"] == "Read"
+    delta = next(
+        e for e in events
+        if e["type"] == "content_block_delta"
+        and e["delta"]["type"] == "input_json_delta"
+    )
+    assert json.loads(delta["delta"]["partial_json"]) == {"file_path": "README.md"}
+    stop = next(e for e in events if e["type"] == "message_delta")
+    assert stop["delta"]["stop_reason"] == "tool_use"
+
+
+def test_anthropic_stream_normal_text_emits_text_delta(tmp_path) -> None:
+    fake = FakeCopilotClient()
+    fake.stream_chunks = ["normal ", "message"]
+    client = _client(fake, tmp_path / "s.db")
+    resp = client.post(
+        "/v1/messages",
+        json={
+            "model": "m365-opus",
+            "stream": True,
+            "max_tokens": 256,
+            "messages": [{"role": "user", "content": "say hi"}],
+        },
+    )
+
+    assert resp.status_code == 200
+    events = _sse_data(resp)
+    delta = next(
+        e for e in events
+        if e["type"] == "content_block_delta"
+        and e["delta"]["type"] == "text_delta"
+    )
+    assert delta["delta"]["text"] == "normal message"
+    stop = next(e for e in events if e["type"] == "message_delta")
+    assert stop["delta"]["stop_reason"] == "end_turn"
 
 
 def _data_uri_png() -> str:
