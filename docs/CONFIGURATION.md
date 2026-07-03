@@ -1,13 +1,11 @@
 # Configuration Guide
 
-Microsoft 365 Copilot OpenAI Proxy uses `config.ini` for non-secret configuration and `.env` for the short-lived Substrate access token. On first run, if `config.ini` is missing, the proxy will automatically create it in the project root directory using `config.ini.template` (or an embedded template).
+On first run, if `config.ini` is missing, the proxy will automatically create it in the project root directory using `config.ini.template` (or an embedded template).
 
 ## Configuration Sections
 
 *   **`[settings]`** — Core operational parameters, session policies, paths, and integration credentials.
 *   **`[serve]`** — API server parameters, address/port bindings, and auto-refresh browser controls.
-*   **`[tool_middleware]`** — Setup for the protocol-neutral tool middleware layer.
-*   **`[tool_emulation]`** — Advanced settings for the ReAct emulation backend (such as schema rules and iteration limits).
 *   **`[capture_token]`** — Controls for the dedicated `capture-token` CLI utility.
 *   **`[launch_edge]`** — Controls for the dedicated `launch-edge` CLI utility.
 *   **`[configure]`** — Client integration setup helpers.
@@ -40,8 +38,6 @@ The short-lived Microsoft 365 Copilot Substrate access token is not stored in `c
 | **`ws_reuse`** | `false` | True keeps a single WebSocket alive per persistent session to skip handshakes. |
 | **`hide_on_token_success`**| `true` | Automatically close or hide the Edge debug window once a fresh token is acquired. |
 | **`substrate_config_path`** | *empty* | Custom local file override for the substrate configuration JSON. |
-| **`prompt_catalog_path`** | *empty* | Custom local file override for the prompt catalog. |
-| **`tool_emulation_injection_path`**| *empty* | Custom local file override for the tool emulation markdown prompt template. |
 
 ### OAuth / Refresh State (Auto-Populated)
 These variables are automatically negotiated and refreshed during browser capture:
@@ -76,52 +72,7 @@ These settings allow sending non-M365 model queries directly to Anthropic:
 
 ---
 
-## 3. Tool Middleware (`[tool_middleware]`)
-
-| Parameter | Default | Description |
-| :--- | :--- | :--- |
-| **`enabled`** | `false` | Turns on the protocol-neutral tool middleware facade. |
-| **`mode`** | `emulation` | Middleware policy mode: `off`, `emulation`, `native`, or `auto`. `emulation` converts tool schemas to ReAct prompt definitions; `native` targets real execution backend seams; `auto` prefers native only when executing. |
-| **`plugin_paths`** | *empty* | Comma-separated paths to external tool/middleware plugin modules. |
-
----
-
-## 4. Tool Emulation Backend (`[tool_emulation]`)
-
-These control the advanced prompt-based ReAct loop that simulates tool capabilities:
-
-| Parameter | Default | Description |
-| :--- | :--- | :--- |
-| **`enabled`** | `false` | Enable the prompt emulation backend for tool definitions. |
-| **`exclude_tools`** | *empty* | Comma-separated list of tool/function names to exclude from emulation (e.g. `bash` to prevent agents from executing commands). |
-| **`emulate_when_capability_unknown`** | `true` | Emulates tools for Anthropic-compatible clients sending unknown capabilities. |
-| **`native_passthrough`** | `true` | Forwards native tool definitions directly when native mode is allowed. |
-| **`mode`** | `response_only` | Mode of emulation (default is `response_only`). |
-| **`prompt_template_version`**| `v1` | Emulation system prompt template format. |
-| **`max_tools_in_prompt`** | `8` | Maximum number of tools to expose to the model in the system prompt turn. |
-| **`max_tool_schema_chars`** | `12000` | Max character budget for combined tool schemas. |
-| **`max_single_tool_schema_chars`**| `3000` | Max character budget for a single tool definition. |
-| **`compact_schema`** | `true` | Minimizes tool schema formatting white space to save input tokens. |
-| **`cache_rendered_tool_prompts`**| `true` | Caches tool definition prompts internally to skip compilation overhead. |
-| **`force_non_streaming`** | `true` | Force a non-streaming turn from the upstream API during a tool emulation cycle, converting back to streaming if requested by the client. |
-| **`override_temperature`** | `false` | Overrides client-provided temperature to ensure deterministic tool extraction. |
-| **`default_temperature`** | `0.0` | Target temperature to enforce when `override_temperature=true`. |
-| **`parser_mode`** | `delimiter_first`| Parsing contract mode for raw response parsing. |
-| **`allow_plain_json`** | `true` | Accept plain JSON outputs as valid tool call syntax. |
-| **`allow_markdown_json_recovery`**| `true` | Extract JSON schemas from markdown codeblocks on malformed turn replies. |
-| **`allow_loose_json_recovery`**| `false` | Attempts fuzzy regex parsing to extract arguments from broken JSON structures. |
-| **`max_parse_chars`** | `20000` | Maximum output characters to scan when looking for tool delimiters. |
-| **`validate_schema`** | `true` | Validate returned arguments against the client-supplied JSON schemas. |
-| **`repair_invalid_tool_call_once`**| `true` | Sends schema errors back to the model for one correction iteration. |
-| **`max_agent_iterations`** | `1` | Max agent ReAct steps allowed per incoming turn. |
-| **`max_total_tool_calls`** | `3` | Maximum tool calls processed per incoming turn. |
-| **`prevent_repeated_tool_calls`**| `true` | Detect and prevent infinite repetition of exact same tool parameters. |
-| **`execution_enabled`** | `false` | Allows the proxy to execute certain standard script blocks locally. |
-| **`execution_sandbox`** | `true` | Runs execution scripts inside a local security sandbox. |
-
----
-
-## 5. Capturing / Launch Helpers (`[capture_token]`, `[launch_edge]`, `[configure]`)
+## 3. Capturing / Launch Helpers (`[capture_token]`, `[launch_edge]`, `[configure]`)
 
 These sections control specific command overrides:
 

@@ -35,10 +35,9 @@ path = "src/m365_copilot_openai_proxy/__init__.py"
 [tool.hatch.build.targets.wheel]
 packages = ["src/m365_copilot_openai_proxy", "src/middleware"]
 
-# Ship the non-Python config data (capture-derived protocol payload + prompt message bundle).
+# Ship the non-Python config data (capture-derived protocol payload).
 [tool.hatch.build.targets.wheel.force-include]
 "src/m365_copilot_openai_proxy/substrate.json" = "m365_copilot_openai_proxy/substrate.json"
-"prompts/messages.properties" = "m365_copilot_openai_proxy/messages.properties"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

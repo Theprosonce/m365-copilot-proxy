@@ -9,7 +9,6 @@ from .models import (
     StandardToolCall,
     StandardToolDefinition,
     StandardToolFunction,
-    StandardToolResult,
 )
 
 
@@ -165,10 +164,3 @@ def standard_tool_call_to_anthropic(call: StandardToolCall) -> dict[str, Any]:
         "input": call.function.arguments,
     }
 
-
-def openai_tool_result_to_standard(tool_call_id: str, content: Any) -> StandardToolResult:
-    return StandardToolResult(tool_call_id=tool_call_id, content=content)
-
-
-def anthropic_tool_result_to_standard(tool_use_id: str, content: Any) -> StandardToolResult:
-    return StandardToolResult(tool_call_id=tool_use_id, content=content)

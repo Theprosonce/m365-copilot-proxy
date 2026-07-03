@@ -6,7 +6,7 @@ This project runs a local FastAPI proxy that talks to the same `substrate.office
 
 No Azure app registration. No admin consent. Sign in with your normal M365 Copilot browser session.
 
-> Fork of [kuchris/m365-copilot-openai-proxy](https://github.com/kuchris/m365-copilot-openai-proxy), extended with a model picker, vision, protocol-neutral tool middleware, temporary chats, and a session-management API.
+> Fork of [kuchris/m365-copilot-openai-proxy](https://github.com/kuchris/m365-copilot-openai-proxy), extended with a model picker, vision, protocol-neutral tool translation, temporary chats, and a session-management API.
 
 ## Why Use This
 
@@ -17,7 +17,7 @@ No Azure app registration. No admin consent. Sign in with your normal M365 Copil
 - **Model picker** — choose Claude Opus or GPT‑5.5 (quick / reasoning) via the model name
 - **Work / Web grounding** toggle
 - **Vision** — forwards images (OpenAI `image_url` base64 and VS Code attachments) to Copilot
-- **Tool middleware** — a protocol-neutral tool layer with a ReAct emulation backend so agentic clients (OpenCode, VS Code, Claude Code) can drive tools, even though Copilot returns only text
+- **Tool translation** — protocol-neutral normalization between OpenAI-compatible and Anthropic-compatible tool definitions; no prompt rewriting or local tool execution
 - **Temporary chats** by default — proxy conversations are not saved to your Copilot history and produce no memories
 - **Per-chat persistence** in SQLite, plus a CRUD API over the tracked conversations
 - Supports OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages style requests
@@ -87,7 +87,7 @@ python -m m365_copilot_openai_proxy serve
 
 ### Project layout
 
-Top-level files are kept for common entry points (`README.md`, `pyproject.toml`, `run.*`, `proxy.*`). Build and installer internals live in `packaging/`, user setup helpers live in `setup/`, docs live in `docs/`, and runtime prompts live in `prompts/`.
+Top-level files are kept for common entry points (`README.md`, `pyproject.toml`, `run.*`, `proxy.*`). Build and installer internals live in `packaging/`, user setup helpers live in `setup/`, docs live in `docs/`.
 
 ### Build / toggle scripts
 
@@ -240,7 +240,7 @@ $env:ANTHROPIC_API_KEY = "dummy"
 claude
 ```
 
-Claude Code note: agentic tool use currently works through the middleware's best-effort ReAct **emulation backend** (see below). Copilot returns only text, so the proxy injects the tool schemas into the prompt and parses the model's reply back into `tool_calls`. It is functional but less reliable than a model with native function calling.
+Claude Code note: this minimum build forwards normal Anthropic-compatible request content to the proxy and keeps tool definitions as native protocol fields where supported. It does not rewrite prompts with tool schemas or locally execute tools.
 
 ### VS Code
 
@@ -294,7 +294,7 @@ Point Claude Code at the proxy's Anthropic-compatible endpoint. In your workspac
 }
 ```
 
-Claude Code then routes its requests through the proxy (using the tool middleware emulation backend). The same env vars work from a terminal (`$env:ANTHROPIC_BASE_URL = ...; claude`).
+Claude Code then routes its requests through the proxy. The same env vars work from a terminal (`$env:ANTHROPIC_BASE_URL = ...; claude`).
 
 ## Persistent Sessions
 
@@ -392,11 +392,10 @@ Example:
 | `DELETE /v1/chats/{key}` | Forget a mapping |
 | `GET /docs`, `GET /openapi.json` | Interactive OpenAPI docs and schema |
 
-### Tool middleware
+### Tool translation
 
-Microsoft 365 Copilot returns plain text and has no native function calling. To let agentic clients work, the proxy routes OpenAI and Anthropic tool definitions through a protocol-neutral middleware layer. The default `emulation` backend injects the client's tool schemas into the prompt (with a strict sentinel-delimited output contract) and parses the model's reply back into OpenAI `tool_calls` / Anthropic `tool_use`. This is best-effort: the model may ignore the format, so the proxy verifies and asks for a correction. Send your tools as usual on `/v1/chat/completions`, `/v1/responses`, or `/v1/messages`.
+The minimum build keeps tool handling deliberately small: OpenAI-compatible and Anthropic-compatible tool definitions are normalized at the request edge and translated between protocol shapes where needed. The proxy does not rewrite prompts with tool instructions, parse model text for synthetic tool calls, or execute tools locally.
 
-The middleware has an explicit native backend seam for future real tool execution. `tool_middleware_mode=native` (in `config.ini`) is intentionally separate from emulation and does not grant arbitrary local execution by itself. See [docs/TOOL_MIDDLEWARE.md](docs/TOOL_MIDDLEWARE.md) for modes, internal models, security boundaries, and unsupported areas.
 
 ### Vision
 
@@ -479,7 +478,7 @@ For a comprehensive guide to all configuration sections, variables, and usage de
 
 - This is an unofficial local proxy over the browser-facing M365 Copilot API, reverse-engineered from the web client. The captured protocol (in `substrate.json`) can break without notice.
 - Token refresh depends on a signed-in browser profile.
-- Tool calling currently defaults to best-effort prompt emulation, not native Copilot function calling — it can fail or misformat.
+- Tool definitions are translated between supported request shapes, but this build does not synthesize tool calls from plain model text.
 - Token usage numbers are placeholders.
 - System prompts and prior conversation history are translated into plain text context.
 - Vision depends on the client sending the image bytes; some clients only send a reference or nothing.

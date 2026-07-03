@@ -2,7 +2,7 @@
 
 A reply "bypasses" when the model ducks the tools — offers its own canvas/Loop, a link, or
 "copy it manually" instead of emitting a tool block. Shared by the translator and the
-emulation pipeline so the heuristic lives in exactly one place.
+translation layer so the heuristic lives in exactly one place.
 """
 from __future__ import annotations
 

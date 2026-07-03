@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
 import time
 import uuid
@@ -97,7 +96,7 @@ def create_app(
         title="Microsoft 365 Copilot OpenAI Proxy",
         description=(
             "OpenAI/Anthropic-compatible proxy over Microsoft 365 Copilot (substrate). "
-            "Exposes the model picker (`tone`), Work/Web grounding, a ReAct tool-calling shim, "
+            "Exposes the model picker (`tone`), Work/Web grounding, native request tool fields, "
             "vision (image upload), and CRUD over the persisted conversation mappings. "
             "Interactive docs at /docs, schema at /openapi.json."
         ),
@@ -222,9 +221,7 @@ def create_app(
             await _debug_raw(raw_request)
             pipeline = ToolMiddlewarePipeline(settings)
 
-            original_stream = request.stream
-            is_emulating = pipeline.is_openai_active(request)
-            request, tools_prompt, normalized_tools = pipeline.preflight_openai(request)
+            request, _tools_prompt, _normalized_tools = pipeline.preflight_openai(request)
 
             translated = translate_openai_request(request, settings)
             session = _persistent_session(
@@ -240,19 +237,6 @@ def create_app(
             ctx = _trim_history(list(translated.additional_context), session)
             prompt = translated.prompt
 
-            if tools_prompt:
-                # The client's own system prompt frames the model as a different agent -> drop it.
-                ctx = [c for c in ctx if not c.startswith("System instructions:")]
-                tool_names = [t.get("name") for t in normalized_tools]
-                _debug_dump(
-                    "REQUEST",
-                    f"tools={tool_names}\ntool_choice={request.tool_choice}\nctx={json.dumps(ctx, ensure_ascii=False)[:4000]}",
-                )
-                clean_prompt = _strip_injection_content(translated.prompt)
-                # Put the protocol IN the user turn
-                prompt = f"{tools_prompt}\n\n# User message\n{clean_prompt}"
-                _debug_dump("FINAL PROMPT", prompt[:6000])
-
             if request.stream:
                 return StreamingResponse(
                     _openai_stream(
@@ -261,36 +245,14 @@ def create_app(
                     media_type="text/event-stream",
                 )
 
-            if is_emulating:
-                calls, text = await pipeline.execute_upstream(
-                    client,
-                    prompt,
-                    ctx,
-                    session,
-                    tone,
-                    normalized_tools,
-                    images=images,
-                    # No reliable project root -> None so paths are NOT rewritten to the server's
-                    # CWD; the client executes the calls against its own workspace.
-                    workspace_root=_project_hint(request.messages) or None,
-                )
-            else:
-                calls, text = (
-                    None,
-                    await client.chat(prompt, ctx, session, tone, images),
-                )
+            text = await client.chat(prompt, ctx, session, tone, images)
+            calls, text = pipeline.tool_calls_from_text(text)
         except ValueError as exc:
             print(f"[400] bad request: {exc}")
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except SubstrateCopilotError as exc:
             print(f"[502] substrate error: {exc}")
             raise HTTPException(status_code=502, detail=str(exc)) from exc
-
-        if original_stream:
-            return StreamingResponse(
-                _openai_emulated_stream(settings.model_alias, calls, text),
-                media_type="text/event-stream",
-            )
 
         if calls:
             return JSONResponse(
@@ -339,7 +301,6 @@ def create_app(
         try:
             request = OpenAIResponsesRequest.model_validate(body)
             pipeline = ToolMiddlewarePipeline(settings)
-            original_stream = request.stream
             translated = translate_responses_request(request)
             proxy_request = OpenAIChatRequest(
                 model=request.model,
@@ -352,8 +313,7 @@ def create_app(
                 functions=request.functions,
                 function_call=request.function_call,
             )
-            is_emulating = pipeline.is_openai_active(proxy_request)
-            proxy_request, tools_prompt, normalized_tools = pipeline.preflight_openai(
+            proxy_request, _tools_prompt, _normalized_tools = pipeline.preflight_openai(
                 proxy_request
             )
             if proxy_request.messages and isinstance(proxy_request.messages[0].content, str):
@@ -363,13 +323,6 @@ def create_app(
             tone = resolve_tone(request.model)
             ctx = list(translated.additional_context)
             prompt = translated.prompt
-            if tools_prompt:
-                ctx = [c for c in ctx if not c.startswith("System instructions:")]
-                clean_prompt = _strip_injection_content(translated.prompt)
-                prompt = (
-                    f"{tools_prompt}\n\n"
-                    f"# User message\n{clean_prompt}"
-                )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -387,26 +340,10 @@ def create_app(
             )
 
         try:
-            if is_emulating:
-                calls, text = await pipeline.execute_upstream(
-                    client,
-                    prompt,
-                    ctx,
-                    session,
-                    tone,
-                    normalized_tools,
-                    workspace_root=os.getcwd(),
-                )
-            else:
-                calls, text = None, await client.chat(prompt, ctx, session, tone)
+            text = await client.chat(prompt, ctx, session, tone)
+            calls, text = pipeline.tool_calls_from_text(text)
         except SubstrateCopilotError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
-
-        if original_stream:
-            return StreamingResponse(
-                _responses_emulated_stream(settings.model_alias, calls, text),
-                media_type="text/event-stream",
-            )
 
         output = (
             _responses_output_from_tool_calls(calls)
@@ -516,11 +453,7 @@ def create_app(
         try:
             pipeline = ToolMiddlewarePipeline(settings)
 
-            is_emulating = pipeline.is_anthropic_active(request)
-            _dummy_req, tools_prompt, normalized_tools = pipeline.preflight_anthropic(request)
-            original_stream = getattr(request, "stream", False)
-            if is_emulating and pipeline.force_non_streaming:
-                request.stream = False
+            _dummy_req, _tools_prompt, _normalized_tools = pipeline.preflight_anthropic(request)
 
             translated = translate_anthropic_request(request, settings)
             session = _persistent_session(
@@ -559,22 +492,15 @@ def create_app(
                 if "title" in last_msg_text.lower():
                     title_gen = True
 
-            # 3. Modification decision
-            injection_active = bool(settings.prompt_injection_enabled)
-            prompt_injection_applied = bool(is_emulating and tools_prompt)
-
             log_event("MESSAGE_TRANSFORM_DECISION", {
                 "workspace_mode": workspace_detected,
                 "title_generation_detected": title_gen,
-                "injection_enabled": injection_active,
-                "prompt_injection_applied": prompt_injection_applied,
-                "continuation_injected": False,
-                "empty_recovery_injected": False,
-                "reason": "emulation active" if is_emulating else "passive_mode"
+                "changed": False,
+                "reason": "minimum_native_translation_only"
             })
             log_raw_event("Modification", {
-                "changed": prompt_injection_applied,
-                "reason": "tool_emulation_injection" if prompt_injection_applied else "injection_enabled_false"
+                "changed": False,
+                "reason": "minimum_native_translation_only"
             })
 
             tone = resolve_tone(request.model)
@@ -586,19 +512,9 @@ def create_app(
                 "ANTHROPIC REQUEST",
                 f"model={request.model} n_tools={len(request.tools) if request.tools else 0} tool_choice={request.tool_choice}\nuser_prompt_tail={translated.prompt[-500:]!r}",
             )
-            if tools_prompt:
-                ctx = [c for c in ctx if not c.startswith("System instructions:")]
-                clean_prompt = _strip_injection_content(translated.prompt)
-                prompt = f"{tools_prompt}\n\n# User message\n{clean_prompt}"
-                log_event("MESSAGE_MODIFIED", {
-                    "reason": "tool_emulation_injection",
-                    "before": clean_prompt,
-                    "after": prompt
-                })
-            else:
-                log_event("MESSAGE_NOT_MODIFIED", {
-                    "reason": "passive_mode" if not is_emulating else "no injection applied"
-                })
+            log_event("MESSAGE_NOT_MODIFIED", {
+                "reason": "minimum_native_translation_only"
+            })
 
             print(f"-> SENT:\n{prompt}", flush=True)
 
@@ -635,29 +551,13 @@ def create_app(
                     media_type="text/event-stream",
                 )
 
-            if is_emulating:
-                calls, text = await pipeline.execute_upstream(
-                    client,
-                    prompt,
-                    ctx,
-                    session,
-                    tone,
-                    normalized_tools,
-                    images=images,
-                    # No reliable project root -> None so paths are NOT rewritten to the server's
-                    # CWD; the client executes the calls against its own workspace.
-                    workspace_root=_project_hint(request.messages) or None,
-                )
-            else:
-                calls, text = (
-                    None,
-                    await client.chat(prompt, ctx, session, tone, images),
-                )
-                log_event("MODEL_RECV_RAW", {
-                    "status_code": 200,
-                    "raw": text,
-                    "chunks": [text]
-                })
+            text = await client.chat(prompt, ctx, session, tone, images)
+            calls, text = pipeline.tool_calls_from_text(text)
+            log_event("MODEL_RECV_RAW", {
+                "status_code": 200,
+                "raw": text,
+                "chunks": [text]
+            })
 
             # 6. Extracted assistant text
             content_block_count = 1 if (text and text.strip()) else 0
@@ -679,14 +579,13 @@ def create_app(
             # 7. Empty response decision
             if not text or not text.strip():
                 log_event("EMPTY_RESPONSE_DECISION", {
-                    "injection_enabled": injection_active,
-                    "recovery_injected": False,
-                    "continuation_injected": False,
-                    "reason": "injection disabled; pass through empty response" if not injection_active else "emulation returned empty response"
+                    "recovery_applied": False,
+                    "continuation_added": False,
+                    "reason": "minimum native translation only; pass through empty response"
                 })
                 log_raw_event("Empty Response", {
                     "empty": True,
-                    "reason": "injection disabled; pass through empty response" if not injection_active else "emulation returned empty response"
+                    "reason": "minimum native translation only; pass through empty response"
                 })
 
             print(f"<- RECV: {text}", flush=True)
@@ -697,27 +596,8 @@ def create_app(
             print(f"[502] substrate error: {exc}")
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 
-        if original_stream:
-            return StreamingResponse(
-                _anthropic_emulated_stream(settings.model_alias, calls, text),
-                media_type="text/event-stream",
-            )
-
         if calls:
-            content = []
-            if text and text.strip():
-                content.append({"type": "text", "text": text})
-            content.extend(
-                [
-                    {
-                        "type": "tool_use",
-                        "id": c.id,
-                        "name": c.function.name,
-                        "input": _args_obj(c.function.arguments),
-                    }
-                    for c in calls
-                ]
-            )
+            content = pipeline.anthropic_content_from_tool_calls(calls, text)
             resp_payload = {
                 "id": f"msg_{uuid.uuid4().hex}",
                 "type": "message",
@@ -787,18 +667,8 @@ _CWD_LABEL_RE = re.compile(
 _ANY_PATH_RE = re.compile(r"([A-Za-z]:[\\/][^\s\"'`<>\n]{2,}|/[A-Za-z0-9._\-/]{3,})")
 
 
-def _strip_injection_content(text: str) -> str:
-    from middleware.tool_emulation import _INJECTION_CONTENT
-    injection_strip = _INJECTION_CONTENT.strip()
-    if not injection_strip:
-        return text
-    escaped = re.escape(injection_strip)
-    pattern = re.compile(rf"^\s*{escaped}\s*\n?---\n?\s*", re.DOTALL)
-    match = pattern.match(text)
-    if match:
-        return text[match.end():]
+def _identity_text(text: str) -> str:
     return text
-
 
 def _msg_text(m) -> str:
     content = getattr(m, "content", "")
@@ -807,7 +677,7 @@ def _msg_text(m) -> str:
     else:
         text = str(content or "")
 
-    return _strip_injection_content(text)
+    return _identity_text(text)
 
 
 def _project_hint(messages: list) -> str:
@@ -847,7 +717,7 @@ def _detect_workspace_mode(messages: list) -> tuple[bool, str]:
     return False, ""
 
 
-# VS Code injects these identical wrapper turns at the head of EVERY chat in a workspace; keying
+# VS Code adds these identical wrapper turns at the head of EVERY chat in a workspace; keying
 # on them would collapse all chats in one project into a single substrate conversation.
 _VSCODE_WRAPPERS = ("<environment_info", "<workspace_info", "<attachments")
 
@@ -1132,69 +1002,6 @@ async def _responses_stream(
     yield f"data: {json.dumps({'type': 'response.completed', 'response': {'id': resp_id, 'object': 'response', 'created_at': created, 'model': model_alias, 'status': 'completed', 'output': [{'id': item_id, 'type': 'message', 'role': 'assistant', 'content': [{'type': 'output_text', 'text': full_text}]}], 'usage': {'input_tokens': 0, 'output_tokens': 0, 'total_tokens': 0}}})}\n\n"
 
 
-async def _responses_emulated_stream(
-    model_alias: str,
-    calls: list | None,
-    text: str,
-) -> AsyncIterator[str]:
-    resp_id = f"resp_{uuid.uuid4().hex}"
-    created = int(time.time())
-    output = (
-        _responses_output_from_tool_calls(calls)
-        if calls
-        else [
-            {
-                "type": "message",
-                "id": f"msg_{uuid.uuid4().hex}",
-                "role": "assistant",
-                "content": [{"type": "output_text", "text": text}],
-            }
-        ]
-    )
-    yield (
-        "data: "
-        + json.dumps(
-            {
-                "type": "response.created",
-                "response": {
-                    "id": resp_id,
-                    "object": "response",
-                    "created_at": created,
-                    "model": model_alias,
-                    "status": "in_progress",
-                    "output": [],
-                },
-            }
-        )
-        + "\n\n"
-    )
-    for index, item in enumerate(output):
-        yield (
-            "data: "
-            + json.dumps(
-                {"type": "response.output_item.added", "output_index": index, "item": item}
-            )
-            + "\n\n"
-        )
-    yield (
-        "data: "
-        + json.dumps(
-            {
-                "type": "response.completed",
-                "response": {
-                    "id": resp_id,
-                    "object": "response",
-                    "created_at": created,
-                    "model": model_alias,
-                    "status": "completed",
-                    "output": output,
-                    "usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
-                },
-            }
-        )
-        + "\n\n"
-    )
-
 async def _anthropic_stream(
     model_alias: str,
     client: SubstrateCopilotClient,
@@ -1287,9 +1094,8 @@ async def _anthropic_stream(
         # 7. Empty response decision
         if not full_text or not full_text.strip():
             log_event("EMPTY_RESPONSE_DECISION", {
-                "injection_enabled": False,
-                "recovery_injected": False,
-                "continuation_injected": False,
+                                "recovery_applied": False,
+                "continuation_added": False,
                 "reason": "stream returned empty content"
             })
             log_raw_event("Empty Response", {
@@ -1324,214 +1130,3 @@ async def _anthropic_stream(
     yield sse("message_stop", {"type": "message_stop"})
 
 
-async def _openai_emulated_stream(
-    model_alias: str,
-    calls: list | None,
-    text: str,
-) -> AsyncIterator[str]:
-    completion_id = f"chatcmpl_{uuid.uuid4().hex}"
-    created = int(time.time())
-
-    if calls:
-        tool_calls_payload = [
-            {
-                "index": i,
-                "id": c.get("id")
-                if isinstance(c, dict)
-                else getattr(c, "id", f"call_{i}"),
-                "type": "function",
-                "function": {
-                    "name": c.get("function", {}).get("name")
-                    if isinstance(c, dict)
-                    else c.function.name,
-                    "arguments": c.get("function", {}).get("arguments")
-                    if isinstance(c, dict)
-                    else c.function.arguments,
-                },
-            }
-            for i, c in enumerate(calls)
-        ]
-        first = {
-            "id": completion_id,
-            "object": "chat.completion.chunk",
-            "created": created,
-            "model": model_alias,
-            "choices": [
-                {
-                    "index": 0,
-                    "delta": {
-                        "role": "assistant",
-                        "tool_calls": tool_calls_payload,
-                    },
-                    "finish_reason": None,
-                }
-            ],
-        }
-        yield f"data: {json.dumps(first)}\n\n"
-        final = {
-            "id": completion_id,
-            "object": "chat.completion.chunk",
-            "created": created,
-            "model": model_alias,
-            "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}],
-        }
-        yield f"data: {json.dumps(final)}\n\n"
-    else:
-        first = {
-            "id": completion_id,
-            "object": "chat.completion.chunk",
-            "created": created,
-            "model": model_alias,
-            "choices": [
-                {
-                    "index": 0,
-                    "delta": {"role": "assistant", "content": text},
-                    "finish_reason": None,
-                }
-            ],
-        }
-        yield f"data: {json.dumps(first)}\n\n"
-        final = {
-            "id": completion_id,
-            "object": "chat.completion.chunk",
-            "created": created,
-            "model": model_alias,
-            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
-        }
-        yield f"data: {json.dumps(final)}\n\n"
-
-    yield "data: [DONE]\n\n"
-
-
-async def _anthropic_emulated_stream(
-    model_alias: str,
-    calls: list | None,
-    text: str,
-) -> AsyncIterator[str]:
-    msg_id = f"msg_{uuid.uuid4().hex}"
-
-    def sse(event: str, data: dict) -> str:
-        return f"event: {event}\ndata: {json.dumps(data)}\n\n"
-
-    yield sse(
-        "message_start",
-        {
-            "type": "message_start",
-            "message": {
-                "id": msg_id,
-                "type": "message",
-                "role": "assistant",
-                "content": [],
-                "model": model_alias,
-                "stop_reason": None,
-                "stop_sequence": None,
-                "usage": {"input_tokens": 0, "output_tokens": 0},
-            },
-        },
-    )
-
-    current_index = 0
-
-    if text and text.strip():
-        yield sse(
-            "content_block_start",
-            {
-                "type": "content_block_start",
-                "index": current_index,
-                "content_block": {"type": "text", "text": ""},
-            },
-        )
-        yield sse(
-            "content_block_delta",
-            {
-                "type": "content_block_delta",
-                "index": current_index,
-                "delta": {"type": "text_delta", "text": text},
-            },
-        )
-        yield sse("content_block_stop", {"type": "content_block_stop", "index": current_index})
-        current_index += 1
-
-    if calls:
-        for i, c in enumerate(calls):
-            name = (
-                c.get("function", {}).get("name")
-                if isinstance(c, dict)
-                else c.function.name
-            )
-            args = (
-                c.get("function", {}).get("arguments")
-                if isinstance(c, dict)
-                else c.function.arguments
-            )
-            cid = c.get("id") if isinstance(c, dict) else getattr(c, "id", f"call_{i}")
-            try:
-                args_obj = json.loads(args or "{}") if isinstance(args, str) else args
-            except Exception:
-                args_obj = {}
-
-            block_index = current_index + i
-            yield sse(
-                "content_block_start",
-                {
-                    "type": "content_block_start",
-                    "index": block_index,
-                    "content_block": {
-                        "type": "tool_use",
-                        "id": cid,
-                        "name": name,
-                        "input": {},
-                    },
-                },
-            )
-            yield sse(
-                "content_block_delta",
-                {
-                    "type": "content_block_delta",
-                    "index": block_index,
-                    "delta": {
-                        "type": "input_json_delta",
-                        "partial_json": json.dumps(args_obj, ensure_ascii=False)
-                        if isinstance(args_obj, dict)
-                        else str(args_obj),
-                    },
-                },
-            )
-            yield sse("content_block_stop", {"type": "content_block_stop", "index": block_index})
-        yield sse(
-            "message_delta",
-            {
-                "type": "message_delta",
-                "delta": {"stop_reason": "tool_use", "stop_sequence": None},
-                "usage": {"output_tokens": 0},
-            },
-        )
-    else:
-        if current_index == 0:
-            yield sse(
-                "content_block_start",
-                {
-                    "type": "content_block_start",
-                    "index": 0,
-                    "content_block": {"type": "text", "text": ""},
-                },
-            )
-            yield sse(
-                "content_block_delta",
-                {
-                    "type": "content_block_delta",
-                    "index": 0,
-                    "delta": {"type": "text_delta", "text": ""},
-                },
-            )
-            yield sse("content_block_stop", {"type": "content_block_stop", "index": 0})
-        yield sse(
-            "message_delta",
-            {
-                "type": "message_delta",
-                "delta": {"stop_reason": "end_turn", "stop_sequence": None},
-                "usage": {"output_tokens": 0},
-            },
-        )
-
-    yield sse("message_stop", {"type": "message_stop"})

@@ -70,9 +70,6 @@ timing = false
 
 # Path overrides
 substrate_config_path = 
-prompt_catalog_path = 
-tool_emulation_injection_path = 
-
 # Browser settings
 edge_headless = false
 edge_path = C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe
@@ -119,46 +116,6 @@ cdp_port = 9222
 [configure]
 undo = false
 
-[tool_middleware]
-enabled = false
-mode = emulation
-plugin_paths = 
-
-[prompt_injection]
-# Canonical prompt injection gate. Keep false for passive tool emulation:
-# tools can still be parsed from model output, but no tool protocol,
-# continuation, or empty-output recovery prompt is injected.
-enabled = false
-
-[tool_emulation]
-enabled = false
-run_mode = auto
-exclude_tools = 
-emulate_when_capability_unknown = true
-native_passthrough = true
-mode = response_only
-prompt_template_version = v1
-max_tools_in_prompt = 8
-max_tool_schema_chars = 12000
-max_single_tool_schema_chars = 3000
-compact_schema = true
-cache_rendered_tool_prompts = true
-force_non_streaming = true
-override_temperature = false
-default_temperature = 0.0
-parser_mode = delimiter_first
-allow_plain_json = true
-allow_markdown_json_recovery = true
-allow_loose_json_recovery = false
-max_parse_chars = 20000
-validate_schema = true
-repair_invalid_tool_call_once = true
-protocol_error_retry_limit = 1
-max_agent_iterations = 1
-max_total_tool_calls = 3
-prevent_repeated_tool_calls = true
-execution_enabled = false
-execution_sandbox = true
 
 [debug]
 tooling_json_log_enabled = true
@@ -301,8 +258,6 @@ class Settings(BaseSettings):
         default=100000, alias="M365_DEBUG_TOOLING_RAW_LOG_MAX_CHARS"
     )
     substrate_config_path: str = Field(default="")
-    prompt_catalog_path: str = Field(default="")
-    tool_emulation_injection_path: str = Field(default="")
     edge_headless: bool = Field(default=False)
     refresh_token: str = Field(default="")
     tenant_id: str = Field(default="")
@@ -357,109 +312,6 @@ class Settings(BaseSettings):
     launch_edge_cdp_port: int = Field(default=9222)
     configure_undo: bool = Field(default=False)
 
-    # Tool Middleware Policy
-    # This is the protocol-neutral facade namespace for real/native tool-model support.
-    # The current default keeps behavior delegated to the existing emulation backend.
-    tool_middleware_enabled: bool = Field(
-        default=True, alias="M365_TOOL_MIDDLEWARE_ENABLED"
-    )
-    tool_middleware_mode: str = Field(
-        default="emulation", alias="M365_TOOL_MIDDLEWARE_MODE"
-    )
-    tool_middleware_plugin_paths: str = Field(
-        default="", alias="M365_TOOL_MIDDLEWARE_PLUGIN_PATHS"
-    )
-
-    # Prompt Injection Policy
-    # Canonical gate from [prompt_injection].enabled / M365_PROMPT_INJECTION_ENABLED.
-    # False keeps passive tool emulation enabled without injecting tool,
-    # continuation, or empty-output recovery prompts.
-    prompt_injection_enabled: bool = Field(
-        default=False, alias="M365_PROMPT_INJECTION_ENABLED"
-    )
-
-    # Tool Emulation Policy
-    tool_emulation_enabled: bool = Field(
-        default=True, alias="M365_TOOL_EMULATION_ENABLED"
-    )
-    tool_emulation_run_mode: str = Field(
-        default="auto", alias="M365_TOOL_RUN_MODE"
-    )
-    tool_emulation_exclude_tools: str = Field(
-        default="", alias="M365_TOOL_EMULATION_EXCLUDE_TOOLS"
-    )
-    # True lets Anthropic-compatible clients that send Claude model names
-    # still use the proxy's prompt-based tool emulation when native
-    # capability is unknown.
-    tool_emulation_emulate_when_capability_unknown: bool = Field(
-        default=True, alias="M365_TOOL_EMULATION_UNKNOWN"
-    )
-    tool_emulation_native_passthrough: bool = Field(
-        default=True, alias="M365_TOOL_EMULATION_NATIVE_PASSTHROUGH"
-    )
-    tool_emulation_mode: str = Field(
-        default="response_only", alias="M365_TOOL_EMULATION_MODE"
-    )
-    tool_emulation_prompt_template_version: str = Field(
-        default="v1", alias="M365_TOOL_EMULATION_PROMPT_VERSION"
-    )
-    tool_emulation_max_tools_in_prompt: int = Field(
-        default=8, alias="M365_TOOL_EMULATION_MAX_TOOLS"
-    )
-    tool_emulation_max_tool_schema_chars: int = Field(
-        default=12000, alias="M365_TOOL_EMULATION_MAX_SCHEMA"
-    )
-    tool_emulation_max_single_tool_schema_chars: int = Field(
-        default=3000, alias="M365_TOOL_EMULATION_MAX_SINGLE_SCHEMA"
-    )
-    tool_emulation_compact_schema: bool = Field(
-        default=True, alias="M365_TOOL_EMULATION_COMPACT_SCHEMA"
-    )
-    tool_emulation_cache_rendered_tool_prompts: bool = Field(
-        default=True, alias="M365_TOOL_EMULATION_CACHE_PROMPTS"
-    )
-    tool_emulation_force_non_streaming: bool = Field(
-        default=True, alias="M365_TOOL_EMULATION_FORCE_NON_STREAMING"
-    )
-    tool_emulation_override_temperature: bool = Field(
-        default=False, alias="M365_TOOL_EMULATION_OVERRIDE_TEMP"
-    )
-    tool_emulation_default_temperature: float = Field(
-        default=0.0, alias="M365_TOOL_EMULATION_DEFAULT_TEMP"
-    )
-    tool_emulation_parser_mode: str = Field(
-        default="delimiter_first", alias="M365_TOOL_EMULATION_PARSER_MODE"
-    )
-    tool_emulation_allow_plain_json: bool = Field(
-        default=True, alias="M365_TOOL_EMULATION_ALLOW_PLAIN_JSON"
-    )
-    tool_emulation_allow_markdown_json_recovery: bool = Field(
-        default=True, alias="M365_TOOL_EMULATION_ALLOW_MARKDOWN_RECOVERY"
-    )
-    tool_emulation_allow_loose_json_recovery: bool = Field(
-        default=False, alias="M365_TOOL_EMULATION_ALLOW_LOOSE_RECOVERY"
-    )
-    tool_emulation_max_parse_chars: int = Field(
-        default=20000, alias="M365_TOOL_EMULATION_MAX_PARSE_CHARS"
-    )
-    tool_emulation_validate_schema: bool = Field(
-        default=True, alias="M365_TOOL_EMULATION_VALIDATE_SCHEMA"
-    )
-    tool_emulation_repair_invalid_tool_call_once: bool = Field(
-        default=True, alias="M365_TOOL_EMULATION_REPAIR_ONCE"
-    )
-    tool_emulation_prevent_repeated_tool_calls: bool = Field(
-        default=True, alias="M365_TOOL_EMULATION_PREVENT_REPEAT"
-    )
-    tool_emulation_execution_enabled: bool = Field(
-        default=False, alias="M365_TOOL_EMULATION_EXECUTION_ENABLED"
-    )
-    tool_emulation_execution_sandbox: bool = Field(
-        default=True, alias="M365_TOOL_EMULATION_EXECUTION_SANDBOX"
-    )
-    tool_emulation_protocol_error_retry_limit: int = Field(
-        default=1, alias="M365_TOOL_EMULATION_PROTOCOL_ERROR_RETRY_LIMIT"
-    )
 
 
 def _field_name_for_config_key(key: str) -> str:
