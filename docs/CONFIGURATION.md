@@ -29,14 +29,17 @@ The short-lived Microsoft 365 Copilot Substrate access token is not stored in `c
 | **`session_ttl_seconds`** | `0` | Seconds after which unused conversations are automatically evicted from the database/cache. `0` disables time-based eviction. |
 | **`recv_timeout`** | `90` | Handshake and socket frame read timeouts (in seconds) before the proxy gives up. |
 | **`open_timeout`** | `30` | WebSocket handshake open timeout (in seconds). |
+| **`substrate_concurrency_limit`** | `2` | Concurrency limit for Substrate API requests (0 or negative means no limit). |
+| **`truncation_before_sending`** | `true` | Whether to truncate the combined prompt/context before sending it to Substrate. Set to `false` to send the full text. |
 | **`session_id`** | *empty* | Process-level persistent session identifier (formerly set via the `M365_SESSION` environment variable). Disables temporary/private chats when specified. |
 | **`session_salt`** | *empty* | Salt used for the automatic client conversation fingerprinting. Set a custom value to ensure hashes remain stable across restarts. |
 | **`debug`** | `false` | Writes detailed request and response payloads, logs, and diagnostics to `debug.log`. |
 | **`timing`** | `false` | Enables extra diagnostic latency and response timing logs. |
-| **`edge_headless`** | `false` | True launches Edge in headless mode for auto-token refresh (no visible window). |
-| **`edge_path`** | `C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe` | Absolute path to the Edge browser executable. |
+| **`edge_headless`** | `false` | True launches Edge/Firefox in headless mode for auto-token refresh (no visible window). |
+| **`edge_path`** | `C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe` | Absolute path to the browser executable (Edge, Chrome, Chromium, or Firefox). |
+| **`prefer_active_browser`** | `true` | When true, searches for and prefers actively running browsers on the system from the prioritized list. |
 | **`ws_reuse`** | `false` | True keeps a single WebSocket alive per persistent session to skip handshakes. |
-| **`hide_on_token_success`**| `true` | Automatically close or hide the Edge debug window once a fresh token is acquired. |
+| **`hide_on_token_success`**| `true` | Automatically close or hide the debug browser window once a fresh token is acquired. |
 | **`substrate_config_path`** | *empty* | Custom local file override for the substrate configuration JSON. |
 
 ### OAuth / Refresh State (Auto-Populated)

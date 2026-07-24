@@ -24,8 +24,10 @@ from m365_copilot_openai_proxy.session_store import (
     PersistentSessionStore,
 )
 from m365_copilot_openai_proxy.substrate_client import (
+    MAX_SUBSTRATE_SEND_CHARS,
     SubstrateCopilotClient,
     _combine_text,
+    _truncate_substrate_text,
     resolve_tone,
 )
 from m365_copilot_openai_proxy.translator import (
@@ -229,7 +231,7 @@ def test_trim_history_preserves_tool_results_and_transcript() -> None:
     ctx = [
         "System instructions:\nbe nice",
         "Prior conversation transcript:\nUser: read file\nAssistant (tool call): read({})",
-        "Tool results:\nTool result [call_123]: <content>Hello, world!</content>",
+        "Tool results:\nEXT_TOOL_OUTPUT: [call_123] <content>Hello, world!</content>",
     ]
     fresh = PersistentSession()  # turn_count 0
     assert _trim_history(list(ctx), fresh) == ctx
@@ -243,6 +245,29 @@ def test_combine_text_leads_with_prompt() -> None:
     out = _combine_text("THE REAL MESSAGE", ["big reference context"])
     assert out.startswith("THE REAL MESSAGE")
     assert "big reference context" in out
+
+
+def test_truncate_substrate_text_leaves_short_and_exact_limit_unchanged() -> None:
+    short = "x" * 10
+    exact = "x" * MAX_SUBSTRATE_SEND_CHARS
+
+    assert _truncate_substrate_text(short) == short
+    assert _truncate_substrate_text(exact) == exact
+
+
+def test_truncate_substrate_text_caps_over_limit() -> None:
+    over = "x" * (MAX_SUBSTRATE_SEND_CHARS + 1)
+
+    truncated = _truncate_substrate_text(over)
+
+    assert len(truncated) == MAX_SUBSTRATE_SEND_CHARS
+    assert truncated == over[:MAX_SUBSTRATE_SEND_CHARS]
+
+
+def test_truncate_substrate_text_can_be_disabled() -> None:
+    over = "x" * (MAX_SUBSTRATE_SEND_CHARS + 1)
+
+    assert _truncate_substrate_text(over, enabled=False) == over
 
 
 # --- session store CRUD + SQLite persistence ---
@@ -345,7 +370,7 @@ def test_chat_forwards_resolved_file_attachment_image(tmp_path) -> None:
 
 
 def _tool_call_block() -> str:
-    return '<<<TOOL_CALLS>>>\n[{"id":"call_fixed","name":"Read","arguments":{"file_path":"README.md"}}]\n<<<END_TOOL_CALLS>>>'
+    return 'EXT_TOOL: [{"id":"call_fixed","name":"Read","arguments":{"file_path":"README.md"}}] :END_EXT_TOOL'
 
 
 def _sse_data(resp) -> list[dict]:
@@ -524,3 +549,35 @@ def test_history_images_before_assistant_are_excluded(tmp_path) -> None:
     )
     assert resp.status_code == 200
     assert fake.images[-1] is None
+
+
+def test_concurrency_semaphore() -> None:
+    import asyncio
+    from m365_copilot_openai_proxy.substrate_client import get_concurrency_semaphore
+
+    async def run_test():
+        sem = get_concurrency_semaphore(2)
+        assert sem._value == 2
+
+        sem2 = get_concurrency_semaphore(2)
+        assert sem is sem2
+
+        sem3 = get_concurrency_semaphore(3)
+        assert sem3._value == 3
+
+    asyncio.run(run_test())
+
+
+def test_shared_httpx_client() -> None:
+    import asyncio
+    import httpx
+    from m365_copilot_openai_proxy.substrate_client import get_shared_httpx_client
+
+    async def run_test():
+        client1 = get_shared_httpx_client()
+        assert isinstance(client1, httpx.AsyncClient)
+
+        client2 = get_shared_httpx_client()
+        assert client1 is client2
+
+    asyncio.run(run_test())

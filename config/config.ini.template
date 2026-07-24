@@ -27,6 +27,12 @@ session_ttl_seconds = 0
 recv_timeout = 90
 open_timeout = 30
 
+# Concurrency limit for substrate requests (0 or negative -> no limit)
+substrate_concurrency_limit = 2
+
+# Truncate prompt/context before sending to substrate
+truncation_before_sending = true
+
 # Debug and timing options
 debug = false
 timing = false
@@ -37,6 +43,7 @@ substrate_config_path =
 # Browser settings
 edge_headless = false
 edge_path = C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe
+prefer_active_browser = true
 
 # OAuth / Auth state (automatically populated/refreshed)
 refresh_token =

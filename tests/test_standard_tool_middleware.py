@@ -82,7 +82,7 @@ def test_openai_to_anthropic_tool_translation() -> None:
 
 def test_received_tool_call_block_becomes_openai_tool_calls() -> None:
     pipeline = ToolMiddlewarePipeline(Settings(access_token="fake"))
-    calls, text = pipeline.tool_calls_from_text('<<<TOOL_CALLS>>>\n[{"id":"call_fixed","name":"Read","arguments":{"file_path":"README.md"}}]\n<<<END_TOOL_CALLS>>>')
+    calls, text = pipeline.tool_calls_from_text('EXT_TOOL: [{"id":"call_fixed","name":"Read","arguments":{"file_path":"README.md"}}] :END_EXT_TOOL')
 
     assert text == ""
     assert calls is not None
@@ -94,16 +94,67 @@ def test_received_tool_call_block_becomes_openai_tool_calls() -> None:
     assert json.loads(dumped["function"]["arguments"]) == {"file_path": "README.md"}
 
 
-def test_received_tool_call_block_becomes_anthropic_content() -> None:
+def test_surrounding_text_means_no_tool_calls() -> None:
     pipeline = ToolMiddlewarePipeline(Settings(access_token="fake"))
-    calls, text = pipeline.tool_calls_from_text('<<<TOOL_CALLS>>>\n[{"id":"toolu_fixed","name":"Glob","arguments":{"pattern":"**/*"}}]\n<<<END_TOOL_CALLS>>>\nI will inspect files.')
+    calls, text = pipeline.tool_calls_from_text('EXT_TOOL: [{"id":"toolu_fixed","name":"Glob","arguments":{"pattern":"**/*"}}]\nI will inspect files.')
 
-    content = pipeline.anthropic_content_from_tool_calls(calls, text)
+    assert calls is None
+    assert text == 'EXT_TOOL: [{"id":"toolu_fixed","name":"Glob","arguments":{"pattern":"**/*"}}]\nI will inspect files.'
 
-    assert content == [
-        {"type": "text", "text": "I will inspect files."},
-        {"type": "tool_use", "id": "toolu_fixed", "name": "Glob", "input": {"pattern": "**/*"}},
-    ]
+
+def test_multiple_ext_tool_blocks() -> None:
+    pipeline = ToolMiddlewarePipeline(Settings(access_token="fake"))
+    calls, text = pipeline.tool_calls_from_text(
+        'EXT_TOOL: [{"id":"call_1","name":"Read","arguments":{"file_path":"a.txt"}}] :END_EXT_TOOL\n'
+        'EXT_TOOL: [{"id":"call_2","name":"Write","arguments":{"file_path":"b.txt","content":"hello"}}] :END_EXT_TOOL'
+    )
+
+    assert text == ""
+    assert calls is not None
+    assert len(calls) == 2
+    assert calls[0].id == "call_1"
+    assert calls[0].function.name == "Read"
+    assert calls[1].id == "call_2"
+    assert calls[1].function.name == "Write"
+
+
+def test_ext_tool_with_surrounding_text_passthrough() -> None:
+    pipeline = ToolMiddlewarePipeline(Settings(access_token="fake"))
+    calls, text = pipeline.tool_calls_from_text(
+        'Let me check that.\n'
+        'EXT_TOOL: [{"id":"call_1","name":"Glob","arguments":{"pattern":"**/*.py"}}]\n'
+        'EXT_TOOL: [{"id":"call_2","name":"Read","arguments":{"file_path":"main.py"}}]\n'
+        'Done.'
+    )
+
+    assert calls is None
+    assert text == 'Let me check that.\nEXT_TOOL: [{"id":"call_1","name":"Glob","arguments":{"pattern":"**/*.py"}}]\nEXT_TOOL: [{"id":"call_2","name":"Read","arguments":{"file_path":"main.py"}}]\nDone.'
+
+
+def test_multiple_tools_in_single_ext_tool_block() -> None:
+    pipeline = ToolMiddlewarePipeline(Settings(access_token="fake"))
+    calls, text = pipeline.tool_calls_from_text(
+        'EXT_TOOL: [{"id":"call_1","name":"Read","arguments":{"file_path":"a.txt"}}, {"id":"call_2","name":"Write","arguments":{"file_path":"b.txt","content":"hello"}}] :END_EXT_TOOL'
+    )
+
+    assert text == ""
+    assert calls is not None
+    assert len(calls) == 2
+    assert calls[0].id == "call_1"
+    assert calls[0].function.name == "Read"
+    assert calls[1].id == "call_2"
+    assert calls[1].function.name == "Write"
+
+
+def test_malformed_ext_tool_block_rejects_entire_response() -> None:
+    pipeline = ToolMiddlewarePipeline(Settings(access_token="fake"))
+    calls, text = pipeline.tool_calls_from_text(
+        'EXT_TOOL: not valid json\n'
+        'EXT_TOOL: [{"id":"call_1","name":"Read","arguments":{"file_path":"a.txt"}}] :END_EXT_TOOL'
+    )
+
+    assert calls is None
+    assert text == 'EXT_TOOL: not valid json\nEXT_TOOL: [{"id":"call_1","name":"Read","arguments":{"file_path":"a.txt"}}] :END_EXT_TOOL'
 
 
 def test_non_tool_call_text_passes_through() -> None:

@@ -15,20 +15,21 @@ from .adapters import (
 )
 from .models import StandardFunctionCall, StandardToolCall
 
-_TOOL_CALL_BEGIN = "<<<TOOL_CALLS>>>"
-_TOOL_CALL_END = "<<<END_TOOL_CALLS>>>"
+_TOOL_CALL_PREFIX = "EXT_TOOL: "
+_TOOL_CALL_SUFFIX = " :END_EXT_TOOL"
 
 
 class ToolMiddlewarePipeline:
     """Minimum protocol-neutral tool translator.
 
     This build does not modify prompts or execute tools internally. It only
-    translates client tool definitions and converts received TOOL_CALL blocks
+    translates client tool definitions and converts received EXT_TOOL blocks
     into real OpenAI/Anthropic-compatible message shapes.
     """
 
     def __init__(self, _settings: object | None = None):
         pass
+
 
     @property
     def force_non_streaming(self) -> bool:
@@ -82,13 +83,34 @@ class ToolMiddlewarePipeline:
         )
 
     def tool_calls_from_text(self, text: str) -> tuple[list[ToolCall] | None, str]:
-        """Convert a received TOOL_CALL block into OpenAI-compatible tool calls."""
-        payload, trailing_text = self._extract_tool_call_payload(text)
-        if payload is None:
+        """Convert received EXT_TOOL blocks into OpenAI-compatible tool calls.
+
+        Only captures when the ENTIRE response consists of EXT_TOOL blocks:
+        each line must start with `EXT_TOOL: ` and end with ` :END_EXT_TOOL`.
+        Any surrounding text means this is not a tool-call response and the
+        text is returned unchanged.
+        """
+        stripped = text.strip()
+        if not stripped:
             return None, text
 
-        raw_calls = self._loads_tool_calls(payload)
-        if raw_calls is None:
+        lines = stripped.splitlines()
+        raw_calls: list[dict[str, Any]] = []
+
+        for line in lines:
+            if not line.strip():
+                return None, text
+            stripped_line = line.strip()
+            if not stripped_line.startswith(_TOOL_CALL_PREFIX):
+                return None, text
+            if not stripped_line.endswith(_TOOL_CALL_SUFFIX):
+                return None, text
+            inner = stripped_line[len(_TOOL_CALL_PREFIX):-len(_TOOL_CALL_SUFFIX)].strip()
+            items = self._loads_tool_calls(inner)
+            if items is not None:
+                raw_calls.extend(items)
+
+        if not raw_calls:
             return None, text
 
         calls: list[ToolCall] = []
@@ -96,7 +118,8 @@ class ToolMiddlewarePipeline:
             call = self._tool_call_from_item(item)
             if call is not None:
                 calls.append(call)
-        return (calls or None), trailing_text
+
+        return (calls or None), ""
 
     def anthropic_content_from_tool_calls(
         self, calls: list[ToolCall] | None, text: str
@@ -114,17 +137,6 @@ class ToolMiddlewarePipeline:
                 }
             )
         return content
-
-    def _extract_tool_call_payload(self, text: str) -> tuple[str | None, str]:
-        if not text or not text.lstrip().startswith(_TOOL_CALL_BEGIN):
-            return None, text
-        start = text.find(_TOOL_CALL_BEGIN)
-        end = text.find(_TOOL_CALL_END, start + len(_TOOL_CALL_BEGIN))
-        if end < 0:
-            return None, text
-        payload = text[start + len(_TOOL_CALL_BEGIN) : end].strip()
-        trailing = text[end + len(_TOOL_CALL_END) :].strip()
-        return payload, trailing
 
     def _loads_tool_calls(self, payload: str) -> list[dict[str, Any]] | None:
         try:

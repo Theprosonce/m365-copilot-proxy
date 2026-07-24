@@ -131,6 +131,8 @@ def create_app(
             resolved_settings.recv_timeout,
             resolved_settings.open_timeout,
             _effective_disable_memory(resolved_settings),
+            resolved_settings.substrate_concurrency_limit,
+            resolved_settings.truncation_before_sending,
         )
     )
 

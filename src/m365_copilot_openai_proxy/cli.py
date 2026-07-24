@@ -232,6 +232,15 @@ async def _cdp_close_browser(port: int) -> None:
 
 
 def _close_debug_browser(port: int) -> None:
+    try:
+        if Settings().prefer_active_browser:
+            browser_path = _resolve_debug_browser_path()
+            if _is_browser_process_running(browser_path):
+                print("prefer_active_browser is enabled and browser is running; overriding close/hide to keep browser open.")
+                return
+    except Exception:
+        pass
+
     hide_val = read_config_value("hide_on_token_success")
     if hide_val is None:
         hide_val = read_config_value("hide_on_token_success")
@@ -533,6 +542,9 @@ def main() -> None:
     subparsers.add_parser(
         "set-token", help="paste a substrate access token or WebSocket URL into .env"
     ).set_defaults(func=set_token_command)
+    subparsers.add_parser(
+        "check", help="analyse installed browsers and test the configured priority"
+    ).set_defaults(func=check_command)
     capture_parser = subparsers.add_parser(
         "capture-token", help="listen for a substrate token via Edge CDP"
     )
@@ -672,8 +684,103 @@ _LINUX_BROWSER_PRIORITY = (
     "chromium",
     "chromium-browser",
     "google-chrome",
+    "google-chrome-stable",
+    "chrome",
     "microsoft-edge",
+    "microsoft-edge-stable",
+    "firefox",
 )
+
+
+def _is_browser_process_running(browser_path: str) -> bool:
+    name = Path(browser_path).name.lower()
+    if os.name == "nt":
+        try:
+            res = subprocess.run(["tasklist", "/NH", "/FI", f"IMAGENAME eq {name}"], capture_output=True, text=True)
+            if name in res.stdout.lower():
+                return True
+            if "edge" in name:
+                res = subprocess.run(["tasklist", "/NH", "/FI", "IMAGENAME eq msedge.exe"], capture_output=True, text=True)
+                if "msedge.exe" in res.stdout.lower():
+                    return True
+        except Exception:
+            pass
+        return False
+
+    try:
+        search_terms = [name]
+        if "edge" in name:
+            search_terms.append("msedge")
+        if "chrome" in name:
+            search_terms.append("chrome")
+
+        for term in search_terms:
+            res = subprocess.run(["pgrep", "-f", term], capture_output=True)
+            if res.returncode == 0:
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def _analyse_installed_browsers() -> dict[str, str | None]:
+    categories = {
+        "chromium": ["chromium", "chromium-browser"],
+        "chrome": ["google-chrome", "google-chrome-stable", "chrome"],
+        "edge": ["microsoft-edge", "microsoft-edge-stable"],
+        "firefox": ["firefox"],
+    }
+    results = {}
+    for cat, candidates in categories.items():
+        found_path = None
+        for candidate in candidates:
+            resolved = shutil.which(candidate)
+            if resolved:
+                found_path = resolved
+                break
+        results[cat] = found_path
+    return results
+
+
+def _attempt_install_chromium() -> None:
+    print("No supported browser (chromium, chrome, edge, firefox) found installed on this system.")
+    print("Attempting to automatically install Chromium...")
+
+    commands = []
+    if shutil.which("apt-get"):
+        commands.append(["sudo", "apt-get", "update"])
+        commands.append(["sudo", "apt-get", "install", "-y", "chromium-browser"])
+    elif shutil.which("snap"):
+        commands.append(["sudo", "snap", "install", "chromium"])
+    elif shutil.which("dnf"):
+        commands.append(["sudo", "dnf", "install", "-y", "chromium"])
+    elif shutil.which("pacman"):
+        commands.append(["sudo", "pacman", "-S", "--noconfirm", "chromium"])
+    elif shutil.which("apk"):
+        commands.append(["sudo", "apk", "add", "chromium"])
+
+    if not commands:
+        print("Could not find a package manager (apt-get, snap, dnf, pacman, apk) to install chromium.")
+        print("Please install Chromium or another browser manually.")
+        return
+
+    try:
+        for cmd in commands:
+            print(f"Running command: {' '.join(cmd)}")
+            res = subprocess.run(cmd, capture_output=True, text=True)
+            if res.returncode != 0:
+                print(f"Command failed with code {res.returncode}")
+                if res.stderr:
+                    print(res.stderr.strip())
+                raise RuntimeError("Command failed")
+        print("Chromium installed successfully!")
+    except Exception as exc:
+        print(f"Failed to automatically install Chromium: {exc}")
+        print("Please install Chromium or another supported browser manually using your system package manager:")
+        print("  - Ubuntu/Debian: sudo apt-get update && sudo apt-get install -y chromium-browser")
+        print("  - Snap: sudo snap install chromium")
+        print("  - Fedora: sudo dnf install chromium")
+        print("  - Arch: sudo pacman -S chromium")
 
 
 def _resolve_debug_browser_path() -> str:
@@ -682,33 +789,50 @@ def _resolve_debug_browser_path() -> str:
         return configured
     if os.name == "nt":
         return _DEFAULT_EDGE_PATH
+
     if sys.platform.startswith("linux"):
-        for candidate in _LINUX_BROWSER_PRIORITY:
-            resolved = shutil.which(candidate)
-            if resolved:
-                return resolved
+        analysis = _analyse_installed_browsers()
+        priority_order = ["chromium", "chrome", "edge", "firefox"]
+
+        for cat in priority_order:
+            path = analysis.get(cat)
+            if path:
+                return path
+
+        # Make if browser not installed
+        _attempt_install_chromium()
+
+        # Check again after trying to install
+        analysis = _analyse_installed_browsers()
+        for cat in priority_order:
+            path = analysis.get(cat)
+            if path:
+                return path
     elif sys.platform.startswith("darwin"):
         _MACOS_BROWSER_PRIORITY = (
             "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
             "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
             "/Applications/Chromium.app/Contents/MacOS/Chromium",
         )
+
         for candidate in _MACOS_BROWSER_PRIORITY:
             if Path(candidate).exists():
                 return candidate
-        for candidate in ("microsoft-edge", "google-chrome", "chromium"):
+        for candidate in ("microsoft-edge", "google-chrome", "chromium", "firefox"):
             resolved = shutil.which(candidate)
             if resolved:
                 return resolved
 
     raise RuntimeError(
-        "Could not automatically locate a Chromium-based browser (Edge, Chrome, Chromium) on your system.\n"
-        "Please install Microsoft Edge or Google Chrome, or configure the 'edge_path' setting in your 'config.ini' "
+        "Could not automatically locate a supported browser (Edge, Chrome, Chromium, Firefox) on your system.\n"
+        "Please install Microsoft Edge, Google Chrome, or Firefox, or configure the 'edge_path' setting in your 'config.ini' "
         "with the absolute path to your browser executable."
     )
 
 
 def _debug_browser_profile_dir(browser_path: str) -> Path:
+    if "firefox" in browser_path.lower():
+        return Path.home() / ".m365-copilot-openai-proxy" / "firefox-profile"
     if sys.platform.startswith("linux") and browser_path.startswith("/snap/bin/"):
         return Path.home() / "m365-copilot-openai-proxy-browser-profile"
     return Path.home() / ".m365-copilot-openai-proxy" / "edge-profile"
@@ -743,13 +867,21 @@ def _launch_debug_edge(cdp_port: int) -> None:
     # If a debug M365 tab is already open, RELOAD it (don't just skip): an idle reused tab never
     # opens a fresh substrate WebSocket, so the token capture would stall. Reloading re-triggers it
     # without opening a duplicate window.
+    try:
+        edge_path = _resolve_debug_browser_path()
+        is_firefox = "firefox" in edge_path.lower()
+    except Exception:
+        edge_path = None
+        is_firefox = False
+
     tabs = _edge_debug_tabs(cdp_port)
     page = _find_m365_page(tabs) if tabs is not None else None
     if page is not None and page.get("webSocketDebuggerUrl"):
         try:
             asyncio.run(_cdp_reload_m365(page["webSocketDebuggerUrl"]))
+            browser_name = "Firefox" if is_firefox else "Edge"
             print(
-                f"Edge already open; reloaded the M365 tab on port {cdp_port} to refresh the substrate token."
+                f"{browser_name} already open; reloaded the M365 tab on port {cdp_port} to refresh the substrate token."
             )
             return
         except Exception as exc:
@@ -757,31 +889,82 @@ def _launch_debug_edge(cdp_port: int) -> None:
                 f"  ! could not reload the existing M365 tab ({exc}); opening a fresh window."
             )
 
-    edge_path = _resolve_debug_browser_path()
+    if not edge_path:
+        edge_path = _resolve_debug_browser_path()
+        is_firefox = "firefox" in edge_path.lower()
+
     profile_dir = _debug_browser_profile_dir(edge_path)
     profile_dir.mkdir(parents=True, exist_ok=True)
-    argv = [
-        edge_path,
-        f"--remote-debugging-port={cdp_port}",
-        f"--user-data-dir={profile_dir}",
-        "--no-first-run",
-    ]
+
     headless = Settings().edge_headless
-    if headless:
-        # Invisible refresh — works only if the profile is already signed in and the tenant
-        # does not require interactive WAM re-auth. First sign-in must be done non-headless.
-        argv += ["--headless=new", "--disable-gpu"]
-    argv.append("https://m365.cloud.microsoft/chat")
-    # Detach from this process's job object so Edge survives when the launcher exits / serve restarts.
+
+    if is_firefox:
+        argv = [
+            edge_path,
+            "--remote-debugging-port",
+            str(cdp_port),
+            "-profile",
+            str(profile_dir),
+            "-no-remote",
+        ]
+        if headless:
+            argv.append("--headless")
+        argv.append("https://m365.cloud.microsoft/chat")
+    else:
+        argv = [
+            edge_path,
+            f"--remote-debugging-port={cdp_port}",
+            f"--user-data-dir={profile_dir}",
+            "--no-first-run",
+        ]
+        if headless:
+            # Invisible refresh — works only if the profile is already signed in and the tenant
+            # does not require interactive WAM re-auth. First sign-in must be done non-headless.
+            argv += ["--headless=new", "--disable-gpu"]
+        argv.append("https://m365.cloud.microsoft/chat")
+
+    # Detach from this process's job object so Edge/Firefox survives when the launcher exits / serve restarts.
     # NOTE: launched VISIBLE (not minimized) — the substrate token is captured from the page's
     # WebSocket, which only opens when the chat actually loads/interacts, so the window must be usable.
     flags = 0x00000008 | 0x01000000 | 0x00000200 if os.name == "nt" else 0
     subprocess.Popen(argv, creationflags=flags, close_fds=True)
+
+    browser_name = "Firefox" if is_firefox else "Edge"
     print(
-        f"Edge launched ({'headless' if headless else 'visible'}) with remote debugging on port {cdp_port}."
+        f"{browser_name} launched ({'headless' if headless else 'visible'}) with remote debugging on port {cdp_port}."
     )
-    print(f"Dedicated Edge profile: {profile_dir}")
+    print(f"Dedicated {browser_name} profile: {profile_dir}")
     print("Sign in to M365 Copilot in that window once, then retry refresh.")
+
+
+def check_command(_args) -> None:
+    print("Analyzing installed browsers on your system...")
+
+    # Analyze
+    analysis = _analyse_installed_browsers()
+
+    # Priority order
+    priority_order = ["chromium", "chrome", "edge", "firefox"]
+
+    found_any = False
+    for cat in priority_order:
+        path = analysis.get(cat)
+        if path:
+            print(f"  [FOUND] {cat}: {path}")
+            found_any = True
+        else:
+            print(f"  [NOT FOUND] {cat}")
+
+    if not found_any:
+        print("\nNo supported browsers are installed on your system.")
+        print("We will attempt to automatically install Chromium if needed.")
+    else:
+        # Resolve which browser would be chosen
+        try:
+            chosen = _resolve_debug_browser_path()
+            print(f"\nResolved browser for token capture: {chosen}")
+        except Exception as exc:
+            print(f"\nError resolving browser: {exc}")
 
 
 def set_token_command(_args) -> None:

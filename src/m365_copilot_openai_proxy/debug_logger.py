@@ -44,7 +44,7 @@ def log_event(event_name: str, payload: Any) -> None:
     except Exception:
         enabled = True
         log_file_name = "logs/debug_tooling.jsonl"
-        max_chars = 50000
+        max_chars = 1280000
 
     if not enabled:
         return
@@ -141,7 +141,7 @@ def log_raw_event(status: str, payload: Any) -> None:
 
     # Time format: [time] e.g. [2026-06-27T15:29:00+07:00]
     time_str = datetime.datetime.now().astimezone().isoformat(timespec='seconds')
-    
+
     # Format line: [time] [Status] : json
     log_line = f"[{time_str}] [{status}] : {json.dumps(truncated_payload, ensure_ascii=False)}"
 

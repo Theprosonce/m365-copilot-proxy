@@ -44,6 +44,30 @@ _FRAME = _CFG["frame"]
 # Overridable per-client via Settings/config.ini (recv_timeout / open_timeout).
 _RECV_TIMEOUT = 90
 _OPEN_TIMEOUT = 30
+MAX_SUBSTRATE_SEND_CHARS = 500_000
+
+
+_SEMAPHORES: dict[asyncio.AbstractEventLoop, asyncio.Semaphore] = {}
+
+
+def get_concurrency_semaphore(limit: int) -> asyncio.Semaphore:
+    loop = asyncio.get_running_loop()
+    if loop not in _SEMAPHORES:
+        _SEMAPHORES[loop] = asyncio.Semaphore(limit)
+    elif _SEMAPHORES[loop]._value != limit and not _SEMAPHORES[loop].locked():
+        _SEMAPHORES[loop] = asyncio.Semaphore(limit)
+    return _SEMAPHORES[loop]
+
+
+_HTTPX_CLIENTS: dict[asyncio.AbstractEventLoop, httpx.AsyncClient] = {}
+
+
+def get_shared_httpx_client() -> httpx.AsyncClient:
+    loop = asyncio.get_running_loop()
+    if loop not in _HTTPX_CLIENTS:
+        limits = httpx.Limits(max_keepalive_connections=50, max_connections=100)
+        _HTTPX_CLIENTS[loop] = httpx.AsyncClient(timeout=60, limits=limits)
+    return _HTTPX_CLIENTS[loop]
 
 
 def resolve_tone(model: str | None) -> str:
@@ -82,6 +106,8 @@ class SubstrateCopilotClient:
         recv_timeout: int = _RECV_TIMEOUT,
         open_timeout: int = _OPEN_TIMEOUT,
         disable_memory: bool = True,
+        concurrency_limit: int = 2,
+        truncation_before_sending: bool = True,
     ):
         if not access_token:
             raise SubstrateCopilotError(
@@ -110,6 +136,8 @@ class SubstrateCopilotClient:
             )
         self._oid: str = claims["oid"]
         self._tid: str = claims["tid"]
+        self._concurrency_limit = concurrency_limit
+        self._truncation_before_sending = truncation_before_sending
 
     def _ws_url(self, conv_id: str, session_id: str, req_id: str) -> str:
         token = quote(self._token, safe="")
@@ -252,8 +280,8 @@ class SubstrateCopilotClient:
             "x-variants": _UPLOAD_VARIANTS,
             "Origin": _ORIGIN,
         }
-        async with httpx.AsyncClient(timeout=60) as client:
-            resp = await client.post(_UPLOAD_URL, files=form, headers=headers)
+        client = get_shared_httpx_client()
+        resp = await client.post(_UPLOAD_URL, files=form, headers=headers)
         resp.raise_for_status()
         body: UploadFileResponse = resp.json()
         doc_id = body.get("docId")
@@ -271,6 +299,39 @@ class SubstrateCopilotClient:
         }
 
     async def _chat_stream_for_turn(
+        self,
+        text: str,
+        conv_id: str,
+        session_id: str,
+        is_start_of_session: bool,
+        tone: str = DEFAULT_TONE,
+        images: list[ExtractedImage] | None = None,
+    ) -> AsyncIterator[str]:
+        limit = self._concurrency_limit
+        sem = get_concurrency_semaphore(limit) if limit > 0 else None
+        if sem:
+            async with sem:
+                async for chunk in self._chat_stream_for_turn_inner(
+                    text=text,
+                    conv_id=conv_id,
+                    session_id=session_id,
+                    is_start_of_session=is_start_of_session,
+                    tone=tone,
+                    images=images,
+                ):
+                    yield chunk
+        else:
+            async for chunk in self._chat_stream_for_turn_inner(
+                text=text,
+                conv_id=conv_id,
+                session_id=session_id,
+                is_start_of_session=is_start_of_session,
+                tone=tone,
+                images=images,
+                ):
+                    yield chunk
+
+    async def _chat_stream_for_turn_inner(
         self,
         text: str,
         conv_id: str,
@@ -306,7 +367,9 @@ class SubstrateCopilotClient:
                 t_nego = time.perf_counter()
                 await ws.send(
                     self._chat_invoke(
-                        text,
+                        _truncate_substrate_text(
+                            text, self._truncation_before_sending
+                        ),
                         conv_id,
                         session_id,
                         req_id,
@@ -395,6 +458,12 @@ class SubstrateCopilotClient:
         ):
             chunks.append(chunk)
         return "".join(chunks)
+
+
+def _truncate_substrate_text(text: str, enabled: bool = True) -> str:
+    if not enabled:
+        return text
+    return text[:MAX_SUBSTRATE_SEND_CHARS]
 
 
 def _combine_text(prompt: str, context: list[str]) -> str:

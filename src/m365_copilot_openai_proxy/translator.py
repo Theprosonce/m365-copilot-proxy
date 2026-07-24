@@ -142,7 +142,7 @@ def translate_openai_request(request: OpenAIChatRequest, settings: Settings | No
                 transcript_lines.append(f"Assistant: {text}")
         elif message.role == "tool":
             ref = message.name or message.tool_call_id or "tool"
-            tool_result_lines.append(f"Tool result [{ref}]: {text}")
+            tool_result_lines.append(f"EXT_TOOL_OUTPUT: [{ref}] {text}")
         else:  # user
             if text:
                 transcript_lines.append(f"User: {text}")
@@ -291,7 +291,7 @@ def translate_anthropic_request(
             elif part.type == "tool_result":
                 ref = part.tool_use_id or "tool"
                 tool_result_lines.append(
-                    f"Tool result [{ref}]: {_tool_result_text(part.content)}"
+                    f"EXT_TOOL_OUTPUT: [{ref}] {_tool_result_text(part.content)}"
                 )
         if role == "user" and user_text_parts:
             last_user_text = "\n".join(user_text_parts)

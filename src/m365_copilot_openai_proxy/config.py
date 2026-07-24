@@ -51,7 +51,7 @@ persist_default = true
 disable_memory = true
 
 # SQLite database path for session/conversation store (empty -> default home dir)
-session_db_path = 
+session_db_path =
 
 # Cap on stored conversations (0 -> no cap)
 session_max = 1000
@@ -63,22 +63,29 @@ session_ttl_seconds = 0
 recv_timeout = 90
 open_timeout = 30
 
+# Concurrency limit for substrate requests (0 or negative -> no limit)
+substrate_concurrency_limit = 2
+
+# Truncate prompt/context before sending to substrate
+truncation_before_sending = true
+
 # Debug and timing options
 debug = false
 timing = false
 
 # Path overrides
-substrate_config_path = 
+substrate_config_path =
 # Browser settings
 edge_headless = false
 edge_path = C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe
+prefer_active_browser = true
 
 # OAuth / Auth state (automatically populated/refreshed)
-refresh_token = 
-tenant_id = 
-client_id = 
-session_id = 
-session_salt = 
+refresh_token =
+tenant_id =
+client_id =
+session_id =
+session_salt =
 
 # Keep WebSocket alive per persistent session
 ws_reuse = false
@@ -90,8 +97,8 @@ hide_on_token_success = true
 anthropic_passthrough = false
 anthropic_upstream = https://api.anthropic.com
 anthropic_version = 2023-06-01
-anthropic_creds_file = 
-anthropic_key = 
+anthropic_creds_file =
+anthropic_key =
 
 [serve]
 host = 127.0.0.1
@@ -231,6 +238,11 @@ class Settings(BaseSettings):
     # Seconds without any substrate frame before giving up; WS handshake open timeout.
     recv_timeout: int = Field(default=90)
     open_timeout: int = Field(default=30)
+    # Concurrency limit for substrate requests (0 or negative -> no limit)
+    substrate_concurrency_limit: int = Field(default=2)
+    # True -> cap the combined prompt/context before sending to substrate.
+    # False -> send the full combined text without pre-send truncation.
+    truncation_before_sending: bool = Field(default=True)
     session_id: str = Field(default="")
     session_salt: str = Field(default="")
     debug: bool = Field(default=False)
@@ -271,6 +283,9 @@ class Settings(BaseSettings):
     # Path to the Edge executable used for the debug token-capture window.
     edge_path: str = Field(
         default=r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+    )
+    prefer_active_browser: bool = Field(
+        default=True,
     )
     # Passthrough: models NOT recognized as ours (m365-*) are forwarded to the real Anthropic API
     # on /v1/messages, instead of being routed to substrate. Off by default.
