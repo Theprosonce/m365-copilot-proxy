@@ -102,11 +102,12 @@ def test_surrounding_text_means_no_tool_calls() -> None:
     assert text == 'EXT_TOOL: [{"id":"toolu_fixed","name":"Glob","arguments":{"pattern":"**/*"}}]\nI will inspect files.'
 
 
-def test_multiple_ext_tool_blocks() -> None:
+def test_surrounding_text_still_extracts_tool_calls() -> None:
     pipeline = ToolMiddlewarePipeline(Settings(access_token="fake"))
     calls, text = pipeline.tool_calls_from_text(
-        'EXT_TOOL: [{"id":"call_1","name":"Read","arguments":{"file_path":"a.txt"}}] :END_EXT_TOOL\n'
-        'EXT_TOOL: [{"id":"call_2","name":"Write","arguments":{"file_path":"b.txt","content":"hello"}}] :END_EXT_TOOL'
+        'Let me check.\n'
+        'EXT_TOOL: [{"id":"call_1","name":"Read","arguments":{"file_path":"a.txt"}}, {"id":"call_2","name":"Write","arguments":{"file_path":"b.txt","content":"hello"}}] :END_EXT_TOOL\n'
+        'Done.'
     )
 
     assert text == ""
@@ -163,3 +164,29 @@ def test_non_tool_call_text_passes_through() -> None:
 
     assert calls is None
     assert text == "plain answer"
+
+
+def test_trailing_quote_after_suffix() -> None:
+    pipeline = ToolMiddlewarePipeline(Settings(access_token="fake"))
+    calls, text = pipeline.tool_calls_from_text(
+        'EXT_TOOL: [{"id":"call_1","name":"Read","arguments":{"file_path":"test.md"}}] :END_EXT_TOOL"'
+    )
+
+    assert calls is not None
+    assert len(calls) == 1
+    assert calls[0].id == "call_1"
+    assert calls[0].function.name == "Read"
+    assert text == ""
+
+
+def test_cmpr_line_after_suffix() -> None:
+    pipeline = ToolMiddlewarePipeline(Settings(access_token="fake"))
+    calls, text = pipeline.tool_calls_from_text(
+        'EXT_TOOL: [{"id":"call_1","name":"Read","arguments":{"file_path":"test.md"}}] :END_EXT_TOOL\n-cmpr'
+    )
+
+    assert calls is not None
+    assert len(calls) == 1
+    assert calls[0].id == "call_1"
+    assert calls[0].function.name == "Read"
+    assert text == ""

@@ -85,36 +85,24 @@ class ToolMiddlewarePipeline:
     def tool_calls_from_text(self, text: str) -> tuple[list[ToolCall] | None, str]:
         """Convert received EXT_TOOL blocks into OpenAI-compatible tool calls.
 
-        Only captures when the ENTIRE response consists of EXT_TOOL blocks:
-        each line must start with `EXT_TOOL: ` and end with ` :END_EXT_TOOL`.
-        Any surrounding text means this is not a tool-call response and the
-        text is returned unchanged.
+        Finds `EXT_TOOL: ` at the start and ` :END_EXT_TOOL` at the end,
+        then parses the JSON between them.
         """
-        stripped = text.strip()
-        if not stripped:
+        start = text.find(_TOOL_CALL_PREFIX)
+        if start == -1:
             return None, text
 
-        lines = stripped.splitlines()
-        raw_calls: list[dict[str, Any]] = []
+        end = text.rfind(_TOOL_CALL_SUFFIX)
+        if end == -1:
+            return None, text
 
-        for line in lines:
-            if not line.strip():
-                return None, text
-            stripped_line = line.strip()
-            if not stripped_line.startswith(_TOOL_CALL_PREFIX):
-                return None, text
-            if not stripped_line.endswith(_TOOL_CALL_SUFFIX):
-                return None, text
-            inner = stripped_line[len(_TOOL_CALL_PREFIX):-len(_TOOL_CALL_SUFFIX)].strip()
-            items = self._loads_tool_calls(inner)
-            if items is not None:
-                raw_calls.extend(items)
-
-        if not raw_calls:
+        inner = text[start + len(_TOOL_CALL_PREFIX):end].strip()
+        items = self._loads_tool_calls(inner)
+        if items is None:
             return None, text
 
         calls: list[ToolCall] = []
-        for item in raw_calls:
+        for item in items:
             call = self._tool_call_from_item(item)
             if call is not None:
                 calls.append(call)
