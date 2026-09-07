@@ -85,6 +85,7 @@ refresh_token =
 tenant_id =
 client_id =
 session_id =
+conversation_id =
 session_salt =
 
 # Keep WebSocket alive per persistent session
@@ -244,6 +245,7 @@ class Settings(BaseSettings):
     # False -> send the full combined text without pre-send truncation.
     truncation_before_sending: bool = Field(default=True)
     session_id: str = Field(default="")
+    conversation_id: str = Field(default="")
     session_salt: str = Field(default="")
     debug: bool = Field(default=False)
     timing: bool = Field(default=False)

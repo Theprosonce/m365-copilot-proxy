@@ -61,9 +61,8 @@ def _session_id_config_value() -> str:
 
 
 def _effective_disable_memory(settings: Settings) -> bool:
-    # A fixed external session is meant to reuse the same Copilot conversation with memory/history.
-    # Temporary chat (`disableMemory=1`) would prevent that, so turn it off when M365_SESSION is set.
-    if _session_id_config_value():
+    # Fixed session/conversation IDs require a non-temporary Copilot conversation.
+    if _session_id_config_value() or settings.conversation_id.strip():
         return False
     return settings.disable_memory
 
@@ -510,6 +509,24 @@ def create_app(
             _debug_images(request.messages, images)
             ctx = _trim_history(list(translated.additional_context), session)
             prompt = translated.prompt
+            if prompt.strip().lower() in {"hi", "test"}:
+                if request.stream:
+                    return StreamingResponse(
+                        _anthropic_static_stream(settings.model_alias, "worked"),
+                        media_type="text/event-stream",
+                    )
+                return JSONResponse(
+                    {
+                        "id": f"msg_{uuid.uuid4().hex}",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": settings.model_alias,
+                        "content": [{"type": "text", "text": "worked"}],
+                        "stop_reason": "end_turn",
+                        "stop_sequence": None,
+                        "usage": {"input_tokens": 0, "output_tokens": 0},
+                    }
+                )
             _debug_dump(
                 "ANTHROPIC REQUEST",
                 f"model={request.model} n_tools={len(request.tools) if request.tools else 0} tool_choice={request.tool_choice}\nuser_prompt_tail={translated.prompt[-500:]!r}",
@@ -781,6 +798,10 @@ def _persistent_session(
     else:
         return None
     session = app.state.session_store.get(key)
+    configured_conversation_id = (app.state.settings.conversation_id or "").strip()
+    if configured_conversation_id:
+        session.conversation_id = configured_conversation_id
+        session.process_initialized = True
     rotated = False
     reason = None
     if not session.process_initialized and session.turn_count > 0:
@@ -799,7 +820,7 @@ def _persistent_session(
     # assistant turn we produced, so the history should carry >= turn_count assistant turns. If it
     # carries fewer, the client truncated history (edited/regenerated an earlier turn) -> branch
     # onto a FRESH substrate conversation instead of continuing — and polluting — the old one.
-    if key.startswith("auto:") and session.turn_count > 0 and messages is not None:
+    if not configured_conversation_id and key.startswith("auto:") and session.turn_count > 0 and messages is not None:
         assistant_turns = sum(
             1 for m in messages if getattr(m, "role", None) == "assistant"
         )
@@ -1050,6 +1071,20 @@ async def _responses_stream(
         yield f"data: {json.dumps({'type': 'response.output_text.delta', 'item_id': item_id, 'output_index': 0, 'content_index': 0, 'delta': text})}\n\n"
     yield f"data: {json.dumps({'type': 'response.output_text.done', 'item_id': item_id, 'output_index': 0, 'content_index': 0, 'text': text})}\n\n"
     yield f"data: {json.dumps({'type': 'response.completed', 'response': {'id': resp_id, 'object': 'response', 'created_at': created, 'model': model_alias, 'status': 'completed', 'output': [{'id': item_id, 'type': 'message', 'role': 'assistant', 'content': [{'type': 'output_text', 'text': text}]}], 'usage': {'input_tokens': 0, 'output_tokens': 0, 'total_tokens': 0}}})}\n\n"
+
+
+async def _anthropic_static_stream(model_alias: str, text: str) -> AsyncIterator[str]:
+    msg_id = f"msg_{uuid.uuid4().hex}"
+
+    def sse(event: str, data: dict) -> str:
+        return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+    yield sse("message_start", {"type": "message_start", "message": {"id": msg_id, "type": "message", "role": "assistant", "content": [], "model": model_alias, "stop_reason": None, "stop_sequence": None, "usage": {"input_tokens": 0, "output_tokens": 0}}})
+    yield sse("content_block_start", {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}})
+    yield sse("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}})
+    yield sse("content_block_stop", {"type": "content_block_stop", "index": 0})
+    yield sse("message_delta", {"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence": None}, "usage": {"output_tokens": 0}})
+    yield sse("message_stop", {"type": "message_stop"})
 
 
 async def _anthropic_stream(

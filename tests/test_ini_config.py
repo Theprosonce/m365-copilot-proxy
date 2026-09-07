@@ -12,6 +12,7 @@ def test_settings_load_defaults_from_config_ini(tmp_path, monkeypatch):
                 "work_grounding = false",
                 "recv_timeout = 12",
                 "truncation_before_sending = false",
+                "conversation_id = 9648c51e-fe11-4554-9d0e-dfcf2f094271",
                 "[serve]",
                 "host = 0.0.0.0",
                 "port = 8181",
@@ -37,6 +38,7 @@ def test_settings_load_defaults_from_config_ini(tmp_path, monkeypatch):
     assert settings.work_grounding is False
     assert settings.recv_timeout == 12
     assert settings.truncation_before_sending is False
+    assert settings.conversation_id == "9648c51e-fe11-4554-9d0e-dfcf2f094271"
     assert settings.serve_host == "0.0.0.0"
     assert settings.serve_port == 8181
     assert settings.serve_cdp_port == 9333

@@ -91,11 +91,15 @@ class FakeCopilotClient:
 
 
 def _client(
-    fake: FakeCopilotClient, tmp_db: Path, persist_default: bool = True
+    fake: FakeCopilotClient,
+    tmp_db: Path,
+    persist_default: bool = True,
+    conversation_id: str = "",
 ) -> TestClient:
     settings = Settings(
         access_token="fake",
         persist_default=persist_default,
+        conversation_id=conversation_id,
         session_db_path=str(tmp_db),
     )
     return TestClient(
@@ -125,6 +129,27 @@ def test_extract_images_openai_and_anthropic() -> None:
         and a[0].data_uri.startswith("data:image/png")
     )
     assert len(b) == 1 and b[0].file_type == "jpg"  # jpeg normalized to jpg
+
+
+def test_extract_images_from_anthropic_tool_result() -> None:
+    parts = [
+        ContentPart(
+            type="tool_result",
+            tool_use_id="read-image",
+            content=[
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/jpeg",
+                        "data": "AAAA",
+                    },
+                }
+            ],
+        )
+    ]
+    images = extract_images(parts)
+    assert len(images) == 1 and images[0].file_type == "jpg"
 
 
 def test_extract_images_skips_remote_and_text() -> None:
@@ -208,6 +233,21 @@ def test_persist_without_user_is_one_conversation_per_chat(tmp_path) -> None:
     send("chat B opening")  # different chat
     assert fake.sessions[0] is fake.sessions[1]
     assert fake.sessions[0] is not fake.sessions[2]
+
+
+def test_configured_conversation_id_is_used_without_rotation(tmp_path) -> None:
+    fake = FakeCopilotClient()
+    conversation_id = "9648c51e-fe11-4554-9d0e-dfcf2f094271"
+    client = _client(fake, tmp_path / "s.db", conversation_id=conversation_id)
+    messages = [{"role": "user", "content": "same chat"}]
+
+    client.post("/v1/chat/completions", json={"model": "m365-opus", "messages": messages})
+    client.post("/v1/chat/completions", json={"model": "m365-opus", "messages": messages})
+
+    assert [session.conversation_id for session in fake.sessions] == [
+        conversation_id,
+        conversation_id,
+    ]
 
 
 # --- history trimming on continued turns ---
@@ -321,8 +361,11 @@ def test_ws_url_disable_memory_can_be_off() -> None:
 
 
 def test_resolve_tone_mapping() -> None:
-    assert resolve_tone("m365-gpt") == "Gpt_5_5_Chat"
-    assert resolve_tone("m365-gpt-think") == "Gpt_5_5_Reasoning"
+    assert resolve_tone("m365-gpt") == "Gpt_5_6_Chat"
+    assert resolve_tone("m365-gpt-5.5-quick") == "Gpt_5_5_Chat"
+    assert resolve_tone("m365-gpt-5.5-think") == "Gpt_5_5_Reasoning"
+    assert resolve_tone("m365-gpt-5.6-quick") == "Gpt_5_6_Chat"
+    assert resolve_tone("m365-gpt-5.6-think:persist") == "Gpt_5_6_Reasoning"
     assert resolve_tone("m365-opus:persist") == "Claude_Opus"  # suffix stripped
     assert resolve_tone("unknown-model") == "Claude_Opus"  # fallback
 

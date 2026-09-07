@@ -53,6 +53,10 @@ def extract_images(content: str | list[ContentPart] | None) -> list[ExtractedIma
             if src.get("type") == "base64" and src.get("data"):
                 mime = src.get("media_type") or "image/png"
                 data_uri = f"data:{mime};base64,{src['data']}"
+        elif part.type == "tool_result" and isinstance(part.content, list):
+            images.extend(
+                extract_images([ContentPart.model_validate(item) for item in part.content])
+            )
         if data_uri:
             ext = _mime_to_ext(mime)
             images.append(
@@ -297,6 +301,14 @@ def translate_anthropic_request(
             last_user_text = "\n".join(user_text_parts)
 
     last = request.messages[-1] if request.messages else None
+    if last is None or not isinstance(last.content, list):
+        tool_result_lines = []
+    else:
+        tool_result_lines = [
+            f"EXT_TOOL_OUTPUT: [{part.tool_use_id or 'tool'}] {_tool_result_text(part.content)}"
+            for part in last.content
+            if part.type == "tool_result"
+        ]
     last_user_text_current_turn = (
         flatten_content(last.content).strip()
         if last is not None and last.role == "user"
@@ -322,9 +334,6 @@ def translate_anthropic_request(
     system_text = _join_lines(system_lines)
     if system_text:
         additional_context.append(f"System instructions:\n{system_text}")
-    transcript_text = _join_lines(transcript_lines)
-    if transcript_text:
-        additional_context.append(f"Prior conversation transcript:\n{transcript_text}")
     tool_results_text = _join_lines(tool_result_lines)
     if tool_results_text:
         additional_context.append(f"Tool results:\n{tool_results_text}")

@@ -14,7 +14,7 @@ Extended with a model picker, vision, protocol-neutral tool translation, tempora
 - Works with your existing signed-in Copilot web session
 - Runs locally on `127.0.0.1` by default
 - Auto-captures and refreshes the short-lived browser token
-- **Model picker** — choose Claude Opus or GPT‑5.5 (quick / reasoning) via the model name
+- **Model picker** — choose Claude Opus or GPT‑5.6 (quick / reasoning) via the model name
 - **Work / Web grounding** toggle
 - **Vision** — forwards images (OpenAI `image_url` base64 and VS Code attachments) to Copilot
 - **Tool translation** — protocol-neutral normalization between OpenAI-compatible and Anthropic-compatible tool definitions; no prompt rewriting or local tool execution
@@ -152,8 +152,10 @@ The model name selects the underlying Copilot model (substrate `tone`). `GET /v1
 | Model id | Underlying model |
 |---|---|
 | `m365-copilot`, `m365-auto`, `m365-opus`, `m365-claude` | Claude Opus |
-| `m365-gpt`, `m365-gpt-quick` | GPT‑5.5 (quick) |
-| `m365-gpt-think`, `m365-gpt-reasoning` | GPT‑5.5 (reasoning) |
+| `m365-gpt-5.5-quick` | GPT‑5.5 (quick) |
+| `m365-gpt-5.5-think` | GPT‑5.5 (reasoning) |
+| `m365-gpt-5.6-quick`, `m365-gpt` | GPT‑5.6 (quick) |
+| `m365-gpt-5.6-think`, `m365-gpt-reasoning` | GPT‑5.6 (reasoning) |
 
 Append `:persist` to any id (e.g. `m365-opus:persist`) to reuse one Copilot conversation per chat.
 
@@ -278,7 +280,7 @@ Then reload VS Code and pick **M365 Opus** in the Chat model dropdown.
 
 Notes:
 - `maxInputTokens + maxOutputTokens` is the number VS Code shows as the context window (200k + 16k → "216k"). Keep `maxOutputTokens` modest and put the budget on input.
-- Add more entries (e.g. `m365-gpt-think`) to switch models from the picker.
+- Add more entries (e.g. `m365-gpt-5.6-think`) to switch models from the picker.
 - **Images**: attach them as a **file** (drag a `.png` in, or use the attach button) — VS Code then sends the bytes as `image_url` and the proxy uploads them to Copilot. Pasting a screenshot from the clipboard is unreliable on custom endpoints (some builds drop it); a saved file always works.
 
 #### 2. With the Claude Code extension

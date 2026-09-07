@@ -32,6 +32,7 @@ The short-lived Microsoft 365 Copilot Substrate access token is not stored in `c
 | **`substrate_concurrency_limit`** | `2` | Concurrency limit for Substrate API requests (0 or negative means no limit). |
 | **`truncation_before_sending`** | `true` | Whether to truncate the combined prompt/context before sending it to Substrate. Set to `false` to send the full text. |
 | **`session_id`** | *empty* | Process-level persistent session identifier (formerly set via the `M365_SESSION` environment variable). Disables temporary/private chats when specified. |
+| **`conversation_id`** | *empty* | Explicit Microsoft 365 Copilot conversation ID to use for the persistent session. Kept separate from the proxy `session_id`. |
 | **`session_salt`** | *empty* | Salt used for the automatic client conversation fingerprinting. Set a custom value to ensure hashes remain stable across restarts. |
 | **`debug`** | `false` | Writes detailed request and response payloads, logs, and diagnostics to `.sessions/debug.log`. |
 | **`timing`** | `false` | Enables extra diagnostic latency and response timing logs. |
