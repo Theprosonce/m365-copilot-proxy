@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from m365_copilot_openai_proxy.config import Settings
 from m365_copilot_openai_proxy.models import AnthropicMessagesRequest, OpenAIChatRequest, OpenAIMessage
@@ -164,6 +165,32 @@ def test_non_tool_call_text_passes_through() -> None:
 
     assert calls is None
     assert text == "plain answer"
+
+
+def test_failed_example_extracts_tools_between_first_prefix_and_last_suffix() -> None:
+    pipeline = ToolMiddlewarePipeline(Settings(access_token="fake"))
+    response = (Path(__file__).parent.parent / "failed_example.txt").read_text()
+
+    calls, text = pipeline.tool_calls_from_text(response)
+
+    assert text == ""
+    assert calls is not None
+    assert len(calls) == 9
+    assert calls[0].function.name == "Edit"
+    assert calls[-1].function.name == "Write"
+    assert "shadow_boxes_fragment_spv," in calls[-2].function.arguments
+
+
+def test_markers_do_not_require_surrounding_spaces() -> None:
+    pipeline = ToolMiddlewarePipeline(Settings(access_token="fake"))
+    calls, text = pipeline.tool_calls_from_text(
+        'prefix EXT_TOOL:[{"id":"call_1","name":"Read","arguments":{}}]:END_EXT_TOOL suffix'
+    )
+
+    assert text == ""
+    assert calls is not None
+    assert len(calls) == 1
+    assert calls[0].id == "call_1"
 
 
 def test_trailing_quote_after_suffix() -> None:

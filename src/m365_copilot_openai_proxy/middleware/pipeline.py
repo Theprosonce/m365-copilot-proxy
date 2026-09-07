@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from typing import Any
 
@@ -15,8 +16,8 @@ from .adapters import (
 )
 from .models import StandardFunctionCall, StandardToolCall
 
-_TOOL_CALL_PREFIX = "EXT_TOOL: "
-_TOOL_CALL_SUFFIX = " :END_EXT_TOOL"
+_TOOL_CALL_PREFIX = "EXT_TOOL:"
+_TOOL_CALL_SUFFIX = ":END_EXT_TOOL"
 
 
 class ToolMiddlewarePipeline:
@@ -85,8 +86,8 @@ class ToolMiddlewarePipeline:
     def tool_calls_from_text(self, text: str) -> tuple[list[ToolCall] | None, str]:
         """Convert received EXT_TOOL blocks into OpenAI-compatible tool calls.
 
-        Finds `EXT_TOOL: ` at the start and ` :END_EXT_TOOL` at the end,
-        then parses the JSON between them.
+        Finds the first `EXT_TOOL:` marker and the last `:END_EXT_TOOL`
+        marker, then parses the JSON between them.
         """
         start = text.find(_TOOL_CALL_PREFIX)
         if start == -1:
@@ -130,7 +131,11 @@ class ToolMiddlewarePipeline:
         try:
             data = json.loads(payload)
         except json.JSONDecodeError:
-            return None
+            repaired = re.sub(r'\\(?!["\\/bfnrtu])', '', payload)
+            try:
+                data = json.loads(repaired)
+            except json.JSONDecodeError:
+                return None
         if isinstance(data, dict):
             data = [data]
         if not isinstance(data, list):
