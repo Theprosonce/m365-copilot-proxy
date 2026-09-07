@@ -73,18 +73,19 @@ if ((-not (Test-Path $exe)) -or $ForceBuild) {
 
 # 3c. start the locally-built signed exe headless, windowless (no MotW -> no SmartScreen prompt).
 # The exe is --windowed (no console subsystem). Without -RedirectStandardOutput/Error any startup
-# crash dies silently and we can't tell whether `serve` is actually listening. So we capture both
-# streams to proxy.log / proxy.err.log and *poll netstat* until the listener binds (or time out).
-$logOut = Join-Path $Root "proxy.log"
-$logErr = Join-Path $Root "proxy.err.log"
+# crash dies silently and we can't tell whether `serve` is actually listening. Keep both streams
+# under .sessions/ and poll netstat until the listener binds (or time out).
+$sessionDir = Join-Path $Root ".sessions"
+New-Item -ItemType Directory -Force -Path $sessionDir | Out-Null
+$logOut = Join-Path $sessionDir "proxy.log"
+$logErr = Join-Path $sessionDir "proxy.err.log"
 # truncate previous run so the dump-on-fail only shows current attempt
 "" | Set-Content -Path $logOut -Encoding utf8
 "" | Set-Content -Path $logErr -Encoding utf8
 
-Write-Host "[M365 Proxy] starting $exeRel serve (logs: proxy.log, proxy.err.log) ..." -ForegroundColor Cyan
+Write-Host "[M365 Proxy] starting $exeRel serve (logs: .sessions/proxy.log, .sessions/proxy.err.log) ..." -ForegroundColor Cyan
 $env:M365_TIME_ZONE      = "Europe/Rome"
 $env:M365_WORK_GROUNDING = "false"
-$env:M365_DEBUG          = "1"
 $proc = Start-Process -FilePath $exe -ArgumentList "serve" `
     -WorkingDirectory $Root `
     -RedirectStandardOutput $logOut -RedirectStandardError $logErr `

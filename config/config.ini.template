@@ -14,7 +14,7 @@ persist_default = true
 # Use temporary/private chats (no memory/history saved to Copilot)
 disable_memory = true
 
-# SQLite database path for session/conversation store (empty -> default home dir)
+# SQLite database path for session/conversation store (empty -> ./.sessions/sessions.db)
 session_db_path =
 
 # Cap on stored conversations (0 -> no cap)
@@ -89,10 +89,10 @@ undo = false
 
 
 [debug]
-tooling_json_log_enabled = true
-tooling_json_log_file = logs/debug_tooling.jsonl
+tooling_json_log_enabled = false
+tooling_json_log_file = .sessions/logs/debug_tooling.jsonl
 tooling_json_log_max_chars = 50000
-tooling_raw_log_enabled = true
-tooling_raw_log_dir = logs
+tooling_raw_log_enabled = false
+tooling_raw_log_dir = .sessions/logs
 tooling_raw_log_name_pattern = activity-{timestamp}.log
 tooling_raw_log_max_chars = 100000

@@ -20,7 +20,6 @@ if defined PID (
     cd /d "%PROXY_DIR%"
     set "M365_TIME_ZONE=Europe/Rome"
     set "M365_WORK_GROUNDING=false"
-    set "M365_DEBUG=1"
     start "M365 Copilot Proxy" /min "%PROXY_DIR%\.venv\Scripts\copilot-openai-proxy.exe" serve
     echo [M365 Proxy] avviato ^(finestra minimizzata^). Porta http://127.0.0.1:%PORT%
 )

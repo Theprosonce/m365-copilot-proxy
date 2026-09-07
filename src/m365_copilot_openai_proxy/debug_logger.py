@@ -38,12 +38,12 @@ def log_event(event_name: str, payload: Any) -> None:
     try:
         from m365_copilot_openai_proxy.config import Settings
         settings = Settings()
-        enabled = getattr(settings, "debug_tooling_json_log_enabled", True)
-        log_file_name = getattr(settings, "debug_tooling_json_log_file", "logs/debug_tooling.jsonl")
+        enabled = getattr(settings, "debug_tooling_json_log_enabled", False)
+        log_file_name = getattr(settings, "debug_tooling_json_log_file", ".sessions/logs/debug_tooling.jsonl")
         max_chars = getattr(settings, "debug_tooling_json_log_max_chars", 50000)
     except Exception:
-        enabled = True
-        log_file_name = "logs/debug_tooling.jsonl"
+        enabled = False
+        log_file_name = ".sessions/logs/debug_tooling.jsonl"
         max_chars = 1280000
 
     if not enabled:
@@ -117,8 +117,8 @@ def log_raw_event(status: str, payload: Any) -> None:
     try:
         from m365_copilot_openai_proxy.config import Settings
         settings = Settings()
-        enabled = getattr(settings, "debug_tooling_raw_log_enabled", True)
-        log_dir = getattr(settings, "debug_tooling_raw_log_dir", "logs")
+        enabled = getattr(settings, "debug_tooling_raw_log_enabled", False)
+        log_dir = getattr(settings, "debug_tooling_raw_log_dir", ".sessions/logs")
         name_pattern = getattr(
             settings,
             "debug_tooling_raw_log_name_pattern",
@@ -126,8 +126,8 @@ def log_raw_event(status: str, payload: Any) -> None:
         )
         max_chars = getattr(settings, "debug_tooling_raw_log_max_chars", 100000)
     except Exception:
-        enabled = True
-        log_dir = "logs"
+        enabled = False
+        log_dir = ".sessions/logs"
         name_pattern = "activity-{timestamp}.log"
         max_chars = 100000
 

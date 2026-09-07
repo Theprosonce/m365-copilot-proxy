@@ -83,7 +83,7 @@ def _emit_timing(**fields: object) -> None:
         return
     try:
         line = "TIMING " + " ".join(f"{k}={v}" for k, v in fields.items())
-        with Path("debug.log").open("a", encoding="utf-8") as f:
+        with (Path.cwd() / ".sessions" / "debug.log").open("a", encoding="utf-8") as f:
             f.write(line + "\n")
     except Exception:
         pass

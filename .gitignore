@@ -13,6 +13,7 @@ debug.log
 proxy.log
 proxy.err.log
 last_request.json
+.sessions/
 *.db
 
 # Tooling caches

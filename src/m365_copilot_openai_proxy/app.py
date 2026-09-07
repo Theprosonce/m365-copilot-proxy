@@ -48,7 +48,7 @@ def _debug_dump(label: str, content: str) -> None:
     if not Settings().debug:
         return
     try:
-        with Path("debug.log").open("a", encoding="utf-8") as f:
+        with (Path.cwd() / ".sessions" / "debug.log").open("a", encoding="utf-8") as f:
             f.write(f"\n===== {label} =====\n{content}\n")
     except Exception:
         pass
@@ -118,7 +118,7 @@ def create_app(
     app.state.token_store = AccessTokenStore(resolved_settings.access_token)
     app.state.session_store = PersistentSessionStore(
         db_path=resolved_settings.session_db_path
-        or str(Path.home() / ".m365-copilot-openai-proxy" / "sessions.db"),
+        or str(Path.cwd() / ".sessions" / "sessions.db"),
         max_sessions=resolved_settings.session_max,
         ttl_seconds=resolved_settings.session_ttl_seconds,
     )

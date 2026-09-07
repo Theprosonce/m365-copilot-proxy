@@ -58,7 +58,7 @@ uv run copilot-openai-proxy serve
 
 `serve` opens the dedicated debug browser window by default. Sign in to M365 Copilot in that window once.
 The profile is stored under
-`%USERPROFILE%\.m365-copilot-openai-proxy\edge-profile`, so later launches can reuse the sign-in.
+`.\.sessions\edge-profile`, so later launches can reuse the sign-in.
 Then the server connects to `http://localhost:9222` and extracts the token from the Copilot tab.
 `uv run copilot-openai-proxy serve` starts an auto-refresh loop by default. It refreshes when the
 current JWT has less than 5 minutes left.

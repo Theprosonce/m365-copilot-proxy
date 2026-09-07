@@ -55,13 +55,13 @@ if [ ! -d .venv ] || [ "$REINSTALL" = "1" ]; then
     ./.venv/bin/python -m pip install --quiet -e .
 fi
 
-# 3b. start headless in background; logs to proxy.log next to the script
-echo "[M365 Proxy] starting from source (background, log: proxy.log)..."
-: > proxy.log  # truncate previous run so the dump-on-fail only shows current attempt
+# 3b. start headless in background; keep runtime output under .sessions/
+mkdir -p .sessions
+echo "[M365 Proxy] starting from source (background, log: .sessions/proxy.log)..."
+: > .sessions/proxy.log
 M365_TIME_ZONE="Europe/Rome" \
 M365_WORK_GROUNDING="false" \
-M365_DEBUG="1" \
-nohup ./.venv/bin/python -m m365_copilot_openai_proxy serve > proxy.log 2>&1 &
+nohup ./.venv/bin/python -m m365_copilot_openai_proxy serve > .sessions/proxy.log 2>&1 &
 BG_PID=$!
 disown "$BG_PID" 2>/dev/null || true
 
@@ -78,7 +78,7 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
 done
 
 if [ "$ready" = "1" ]; then
-    echo "[M365 Proxy] started (pid $BG_PID). http://127.0.0.1:$PORT  (logs: proxy.log)"
+    echo "[M365 Proxy] started (pid $BG_PID). http://127.0.0.1:$PORT  (logs: .sessions/proxy.log)"
     exit 0
 fi
 
@@ -88,6 +88,6 @@ if ! kill -0 "$BG_PID" 2>/dev/null; then
 else
     echo "  process pid $BG_PID still running but no listener; leaving it for inspection" >&2
 fi
-echo "----- tail proxy.log -----" >&2
-tail -n 20 proxy.log >&2 2>/dev/null || true
+echo "----- tail .sessions/proxy.log -----" >&2
+tail -n 20 .sessions/proxy.log >&2 2>/dev/null || true
 exit 1

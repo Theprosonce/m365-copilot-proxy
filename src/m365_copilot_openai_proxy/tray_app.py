@@ -41,7 +41,7 @@ RED_HOVER = "#EC5D62"
 MUTED = "#8B8B95"
 TEXT = "#ECECEE"
 
-_GUI_SETTINGS = Path.home() / ".m365-copilot-openai-proxy" / "gui-settings.json"
+_GUI_SETTINGS = Path.cwd() / ".sessions" / "gui-settings.json"
 _DEFAULT_SETTINGS = {
     "port": 8000,
     "work_grounding": False,  # web grounding (better for coding agents)
@@ -402,7 +402,7 @@ def _acquire_singleton() -> bool:
     try:
         import fcntl
 
-        lock = Path.home() / ".m365-copilot-openai-proxy" / "tray.lock"
+        lock = Path.cwd() / ".sessions" / "tray.lock"
         lock.parent.mkdir(parents=True, exist_ok=True)
         f = open(lock, "w")
         fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)

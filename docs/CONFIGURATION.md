@@ -24,7 +24,7 @@ The short-lived Microsoft 365 Copilot Substrate access token is not stored in `c
 | **`work_grounding`** | `true` | `true` uses **Enterprise grounding** (grants access to corporate/work context and files); `false` uses **Web grounding**. Coding agents usually want `false` to avoid pulling irrelevant internal company documents. |
 | **`persist_default`** | `true` | Retain and reuse exactly one Substrate conversation per client chat. Cuts down the footprint on the server-side. |
 | **`disable_memory`** | `true` | Open conversations as a temporary/private chat (i.e. `disableMemory=1`): history and memories are not saved to Microsoft Copilot. |
-| **`session_db_path`** | *empty* | Path to the SQLite database used to persist conversation session mappings. Defaults to `~/.m365-copilot-openai-proxy/sessions.db`. |
+| **`session_db_path`** | *empty* | Path to the SQLite database used to persist conversation session mappings. Defaults to `./.sessions/sessions.db`. |
 | **`session_max`** | `1000` | Maximum number of conversations to store in the cache/DB. Excess conversations are evicted using an LRU (Least-Recently Used) policy. Use `0` for no cap. |
 | **`session_ttl_seconds`** | `0` | Seconds after which unused conversations are automatically evicted from the database/cache. `0` disables time-based eviction. |
 | **`recv_timeout`** | `90` | Handshake and socket frame read timeouts (in seconds) before the proxy gives up. |
@@ -33,7 +33,7 @@ The short-lived Microsoft 365 Copilot Substrate access token is not stored in `c
 | **`truncation_before_sending`** | `true` | Whether to truncate the combined prompt/context before sending it to Substrate. Set to `false` to send the full text. |
 | **`session_id`** | *empty* | Process-level persistent session identifier (formerly set via the `M365_SESSION` environment variable). Disables temporary/private chats when specified. |
 | **`session_salt`** | *empty* | Salt used for the automatic client conversation fingerprinting. Set a custom value to ensure hashes remain stable across restarts. |
-| **`debug`** | `false` | Writes detailed request and response payloads, logs, and diagnostics to `debug.log`. |
+| **`debug`** | `false` | Writes detailed request and response payloads, logs, and diagnostics to `.sessions/debug.log`. |
 | **`timing`** | `false` | Enables extra diagnostic latency and response timing logs. |
 | **`edge_headless`** | `false` | True launches Edge/Firefox in headless mode for auto-token refresh (no visible window). |
 | **`edge_path`** | `C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe` | Absolute path to the browser executable (Edge, Chrome, Chromium, or Firefox). |

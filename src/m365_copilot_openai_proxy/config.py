@@ -50,7 +50,7 @@ persist_default = true
 # Use temporary/private chats (no memory/history saved to Copilot)
 disable_memory = true
 
-# SQLite database path for session/conversation store (empty -> default home dir)
+# SQLite database path for session/conversation store (empty -> ./.sessions/sessions.db)
 session_db_path =
 
 # Cap on stored conversations (0 -> no cap)
@@ -124,11 +124,11 @@ undo = false
 
 
 [debug]
-tooling_json_log_enabled = true
-tooling_json_log_file = logs/debug_tooling.jsonl
+tooling_json_log_enabled = false
+tooling_json_log_file = .sessions/logs/debug_tooling.jsonl
 tooling_json_log_max_chars = 50000
-tooling_raw_log_enabled = true
-tooling_raw_log_dir = logs
+tooling_raw_log_enabled = false
+tooling_raw_log_dir = .sessions/logs
 tooling_raw_log_name_pattern = activity-{timestamp}.log
 tooling_raw_log_max_chars = 100000
 """
@@ -227,7 +227,7 @@ class Settings(BaseSettings):
     # not saved to the user's Copilot history and produces no memories. Captured from the web
     # client's incognito toggle. Default on so the proxy doesn't pollute the user's chat history.
     disable_memory: bool = Field(default=True)
-    # SQLite file for the session/conversation store. Empty -> default under the home dir.
+    # SQLite file for the session/conversation store. Empty -> ./.sessions/sessions.db.
     # Tests point this at a tmp file so they never touch the real store.
     session_db_path: str = Field(default="")
     # Cap on stored conversations: when exceeded, the least-recently-used ones are evicted
@@ -248,19 +248,19 @@ class Settings(BaseSettings):
     debug: bool = Field(default=False)
     timing: bool = Field(default=False)
     debug_tooling_json_log_enabled: bool = Field(
-        default=True, alias="M365_DEBUG_TOOLING_JSON_LOG_ENABLED"
+        default=False, alias="M365_DEBUG_TOOLING_JSON_LOG_ENABLED"
     )
     debug_tooling_json_log_file: str = Field(
-        default="logs/debug_tooling.jsonl", alias="M365_DEBUG_TOOLING_JSON_LOG_FILE"
+        default=".sessions/logs/debug_tooling.jsonl", alias="M365_DEBUG_TOOLING_JSON_LOG_FILE"
     )
     debug_tooling_json_log_max_chars: int = Field(
         default=50000, alias="M365_DEBUG_TOOLING_JSON_LOG_MAX_CHARS"
     )
     debug_tooling_raw_log_enabled: bool = Field(
-        default=True, alias="M365_DEBUG_TOOLING_RAW_LOG_ENABLED"
+        default=False, alias="M365_DEBUG_TOOLING_RAW_LOG_ENABLED"
     )
     debug_tooling_raw_log_dir: str = Field(
-        default="logs", alias="M365_DEBUG_TOOLING_RAW_LOG_DIR"
+        default=".sessions/logs", alias="M365_DEBUG_TOOLING_RAW_LOG_DIR"
     )
     debug_tooling_raw_log_name_pattern: str = Field(
         default="activity-{timestamp}.log", alias="M365_DEBUG_TOOLING_RAW_LOG_NAME_PATTERN"

@@ -831,11 +831,8 @@ def _resolve_debug_browser_path() -> str:
 
 
 def _debug_browser_profile_dir(browser_path: str) -> Path:
-    if "firefox" in browser_path.lower():
-        return Path.home() / ".m365-copilot-openai-proxy" / "firefox-profile"
-    if sys.platform.startswith("linux") and browser_path.startswith("/snap/bin/"):
-        return Path.home() / "m365-copilot-openai-proxy-browser-profile"
-    return Path.home() / ".m365-copilot-openai-proxy" / "edge-profile"
+    profile = "firefox-profile" if "firefox" in browser_path.lower() else "edge-profile"
+    return Path.cwd() / ".sessions" / profile
 
 
 def _edge_debug_tabs(cdp_port: int) -> list[dict] | None:

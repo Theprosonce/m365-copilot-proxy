@@ -57,7 +57,7 @@ On first run, the proxy opens a dedicated Browser window. Sign in to M365 Copilo
 The dedicated browser profile is stored at:
 
 ```text
-%USERPROFILE%\.m365-copilot-openai-proxy\edge-profile
+.\.sessions\edge-profile
 ```
 
 If startup says it is waiting for a token, click the Copilot message box and type one character. You do not need to send the message.
@@ -463,7 +463,7 @@ $r.content[0].text
 
 - The proxy listens on `127.0.0.1` by default.
 - The browser token is stored locally in `.env` as `M365_ACCESS_TOKEN`.
-- `config.ini`, `.env`, `.venv/`, Python cache files, `*.har` captures, and `debug.log` are ignored by Git. HAR captures and debug logs can contain tokens, cookies, and tenant data — never commit them.
+- `config.ini`, `.env`, `.venv/`, `.sessions/`, Python cache files, and `*.har` captures are ignored by Git. HAR captures and debug logs can contain tokens, cookies, and tenant data — never commit them.
 - The proxy does not send your token to any external service besides Microsoft 365 Copilot's own `substrate.office.com` endpoint.
 - Anyone who can read your `.env` can use the token until it expires. Treat it like a secret.
 - Temporary chats (`disable_memory = true` in `config.ini`, default) keep proxy traffic out of your Copilot history, but the requests still hit Microsoft's servers — this is normal Copilot use, not anonymisation.
