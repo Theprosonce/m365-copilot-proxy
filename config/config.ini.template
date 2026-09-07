@@ -14,6 +14,9 @@ persist_default = true
 # Use temporary/private chats (no memory/history saved to Copilot)
 disable_memory = true
 
+# Send only the current message and tool results; omit system and prior conversation context
+disable_context = true
+
 # SQLite database path for session/conversation store (empty -> ./.sessions/sessions.db)
 session_db_path =
 

@@ -302,7 +302,7 @@ def create_app(
         try:
             request = OpenAIResponsesRequest.model_validate(body)
             pipeline = ToolMiddlewarePipeline(settings)
-            translated = translate_responses_request(request)
+            translated = translate_responses_request(request, settings)
             proxy_request = OpenAIChatRequest(
                 model=request.model,
                 messages=[OpenAIMessage(role="user", content=translated.prompt)],

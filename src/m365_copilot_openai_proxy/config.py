@@ -50,6 +50,9 @@ persist_default = true
 # Use temporary/private chats (no memory/history saved to Copilot)
 disable_memory = true
 
+# Send only the current message and tool results; omit system and prior conversation context
+disable_context = true
+
 # SQLite database path for session/conversation store (empty -> ./.sessions/sessions.db)
 session_db_path =
 
@@ -228,6 +231,9 @@ class Settings(BaseSettings):
     # not saved to the user's Copilot history and produces no memories. Captured from the web
     # client's incognito toggle. Default on so the proxy doesn't pollute the user's chat history.
     disable_memory: bool = Field(default=True)
+    # True -> send only the current message and tool results to substrate.
+    # False -> include system instructions and prior conversation context.
+    disable_context: bool = Field(default=True)
     # SQLite file for the session/conversation store. Empty -> ./.sessions/sessions.db.
     # Tests point this at a tmp file so they never touch the real store.
     session_db_path: str = Field(default="")

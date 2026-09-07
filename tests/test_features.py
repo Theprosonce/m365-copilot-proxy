@@ -33,6 +33,14 @@ from m365_copilot_openai_proxy.substrate_client import (
 from m365_copilot_openai_proxy.translator import (
     extract_file_attachments,
     extract_images,
+    translate_anthropic_request,
+    translate_openai_request,
+    translate_responses_request,
+)
+from m365_copilot_openai_proxy.models import (
+    AnthropicMessagesRequest,
+    OpenAIChatRequest,
+    OpenAIResponsesRequest,
 )
 
 
@@ -248,6 +256,98 @@ def test_configured_conversation_id_is_used_without_rotation(tmp_path) -> None:
         conversation_id,
         conversation_id,
     ]
+
+
+# --- clean outbound messages ---
+
+
+def test_translators_send_only_current_message_and_tool_results() -> None:
+    openai = translate_openai_request(
+        OpenAIChatRequest(
+            model="m365-opus",
+            messages=[
+                OpenAIMessage(role="system", content="hidden system prompt"),
+                OpenAIMessage(role="user", content="old question"),
+                OpenAIMessage(role="assistant", content="old answer"),
+                OpenAIMessage(role="user", content="current question"),
+            ],
+        )
+    )
+    responses = translate_responses_request(
+        OpenAIResponsesRequest(
+            model="m365-opus",
+            instructions="hidden system prompt",
+            input=[
+                {"role": "user", "content": "old question"},
+                {"role": "assistant", "content": "old answer"},
+                {"role": "user", "content": "current question"},
+            ],
+        )
+    )
+    anthropic = translate_anthropic_request(
+        AnthropicMessagesRequest(
+            model="m365-opus",
+            max_tokens=256,
+            system="hidden system prompt",
+            messages=[
+                {"role": "user", "content": "old question"},
+                {"role": "assistant", "content": "old answer"},
+                {"role": "user", "content": "current question"},
+            ],
+        )
+    )
+
+    for translated in (openai, responses, anthropic):
+        assert translated.prompt == "current question"
+        assert translated.additional_context == []
+
+
+def test_translators_include_context_when_enabled() -> None:
+    settings = Settings(disable_context=False)
+    openai = translate_openai_request(
+        OpenAIChatRequest(
+            model="m365-opus",
+            messages=[
+                OpenAIMessage(role="system", content="system prompt"),
+                OpenAIMessage(role="user", content="old question"),
+                OpenAIMessage(role="assistant", content="old answer"),
+                OpenAIMessage(role="user", content="current question"),
+            ],
+        ),
+        settings,
+    )
+    responses = translate_responses_request(
+        OpenAIResponsesRequest(
+            model="m365-opus",
+            instructions="system prompt",
+            input=[
+                {"role": "user", "content": "old question"},
+                {"role": "assistant", "content": "old answer"},
+                {"role": "user", "content": "current question"},
+            ],
+        ),
+        settings,
+    )
+    anthropic = translate_anthropic_request(
+        AnthropicMessagesRequest(
+            model="m365-opus",
+            max_tokens=256,
+            system="system prompt",
+            messages=[
+                {"role": "user", "content": "old question"},
+                {"role": "assistant", "content": "old answer"},
+                {"role": "user", "content": "current question"},
+            ],
+        ),
+        settings,
+    )
+
+    for translated in (openai, responses, anthropic):
+        assert translated.prompt == "current question"
+        assert translated.additional_context == [
+            "System instructions:\nsystem prompt",
+            "Prior conversation transcript:\nUser: old question\nAssistant: old answer",
+        ]
 
 
 # --- history trimming on continued turns ---

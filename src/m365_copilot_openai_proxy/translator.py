@@ -169,27 +169,28 @@ def translate_openai_request(request: OpenAIChatRequest, settings: Settings | No
                     break
 
     additional_context: list[str] = []
-    system_text = _join_lines(system_lines)
-    if system_text:
-        additional_context.append(f"System instructions:\n{system_text}")
-    transcript_text = _join_lines(transcript_lines)
-    if transcript_text:
-        additional_context.append(f"Prior conversation transcript:\n{transcript_text}")
+    if not (settings.disable_context if settings is not None else True):
+        system_text = _join_lines(system_lines)
+        if system_text:
+            additional_context.append(f"System instructions:\n{system_text}")
+        transcript_text = _join_lines(transcript_lines)
+        if transcript_text:
+            additional_context.append(f"Prior conversation transcript:\n{transcript_text}")
     tool_results_text = _join_lines(tool_result_lines)
     if tool_results_text:
         additional_context.append(f"Tool results:\n{tool_results_text}")
     return TranslatedRequest(prompt=prompt, additional_context=additional_context)
 
 
-def translate_responses_request(request: "OpenAIResponsesRequest") -> TranslatedRequest:
+def translate_responses_request(
+    request: "OpenAIResponsesRequest", settings: Settings | None = None
+) -> TranslatedRequest:
     instructions = request.instructions or ""
     if isinstance(request.input, str):
-        return TranslatedRequest(
-            prompt=request.input,
-            additional_context=[f"System instructions:\n{instructions}"]
-            if instructions
-            else [],
-        )
+        additional_context = []
+        if instructions and not (settings.disable_context if settings is not None else True):
+            additional_context.append(f"System instructions:\n{instructions}")
+        return TranslatedRequest(prompt=request.input, additional_context=additional_context)
     # input is a list of message dicts
     system_lines: list[str] = []
     if instructions:
@@ -224,12 +225,13 @@ def translate_responses_request(request: "OpenAIResponsesRequest") -> Translated
     if not prompt:
         raise ValueError("No user message found in input.")
     additional_context: list[str] = []
-    system_text = _join_lines(system_lines)
-    if system_text:
-        additional_context.append(f"System instructions:\n{system_text}")
-    transcript_text = _join_lines(transcript_lines)
-    if transcript_text:
-        additional_context.append(f"Prior conversation transcript:\n{transcript_text}")
+    if not (settings.disable_context if settings is not None else True):
+        system_text = _join_lines(system_lines)
+        if system_text:
+            additional_context.append(f"System instructions:\n{system_text}")
+        transcript_text = _join_lines(transcript_lines)
+        if transcript_text:
+            additional_context.append(f"Prior conversation transcript:\n{transcript_text}")
     return TranslatedRequest(prompt=prompt, additional_context=additional_context)
 
 
@@ -331,9 +333,13 @@ def translate_anthropic_request(
                     break
 
     additional_context: list[str] = []
-    system_text = _join_lines(system_lines)
-    if system_text:
-        additional_context.append(f"System instructions:\n{system_text}")
+    if not (settings.disable_context if settings is not None else True):
+        system_text = _join_lines(system_lines)
+        if system_text:
+            additional_context.append(f"System instructions:\n{system_text}")
+        transcript_text = _join_lines(transcript_lines)
+        if transcript_text:
+            additional_context.append(f"Prior conversation transcript:\n{transcript_text}")
     tool_results_text = _join_lines(tool_result_lines)
     if tool_results_text:
         additional_context.append(f"Tool results:\n{tool_results_text}")
