@@ -51,6 +51,7 @@ persist_default = true
 disable_memory = true
 
 # Send only the current message and tool results; omit system and prior conversation context
+# (the proxy injects its own EXT_TOOL contract, plus the client's tool definitions, so tools keep working)
 disable_context = true
 
 # SQLite database path for session/conversation store (empty -> ./.sessions/sessions.db)
@@ -231,7 +232,8 @@ class Settings(BaseSettings):
     # not saved to the user's Copilot history and produces no memories. Captured from the web
     # client's incognito toggle. Default on so the proxy doesn't pollute the user's chat history.
     disable_memory: bool = Field(default=True)
-    # True -> send only the current message and tool results to substrate.
+    # True -> send only the current message and tool results to substrate. The proxy injects
+    # its own EXT_TOOL contract (plus the client's tool definitions) so tools keep working.
     # False -> include system instructions and prior conversation context.
     disable_context: bool = Field(default=True)
     # SQLite file for the session/conversation store. Empty -> ./.sessions/sessions.db.

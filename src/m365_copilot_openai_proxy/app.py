@@ -872,13 +872,16 @@ def _chat_info(key: str, s: PersistentSession) -> ChatInfo:
 
 
 def _trim_history(ctx: list[str], session: PersistentSession | None) -> list[str]:
-    """On continued turns of a persistent session, drop the re-sent prior transcript: substrate
-    keeps the thread under the same conversation_id, so resending it just bloats the prompt and
-    buries the current message.
-    System-instruction blocks are kept (they carry the client's standing directives).
-    Tool results are ALWAYS kept - the model needs them to answer the user's request."""
-    # Never trim history! This makes sure the model can use tools without limit, keeping full context seeded on each turn
-    return ctx
+    """Send bootstrap instructions once, then only unseen tool results.
+
+    A persistent substrate conversation retains its first-turn EXT_TOOL contract and callable
+    tool definitions. Continued turns therefore receive only the current tool-result block; a
+    normal user turn receives no appended context. Non-persistent requests keep the bootstrap
+    because each request starts a new substrate conversation.
+    """
+    if session is None or session.turn_count == 0:
+        return ctx
+    return [item for item in ctx if item.startswith("Tool results:\n")]
 
 
 async def _debug_raw(raw_request: Request) -> None:

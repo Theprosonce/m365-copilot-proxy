@@ -31,6 +31,7 @@ from m365_copilot_openai_proxy.substrate_client import (
     resolve_tone,
 )
 from m365_copilot_openai_proxy.translator import (
+    ext_tool_context,
     extract_file_attachments,
     extract_images,
     translate_anthropic_request,
@@ -299,7 +300,36 @@ def test_translators_send_only_current_message_and_tool_results() -> None:
 
     for translated in (openai, responses, anthropic):
         assert translated.prompt == "current question"
-        assert translated.additional_context == []
+        assert translated.additional_context == [
+            f"System instructions:\n{ext_tool_context([])}"
+        ]
+
+
+def test_ext_tool_context_includes_client_tools() -> None:
+    translated = translate_openai_request(
+        OpenAIChatRequest(
+            model="m365-opus",
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "Read",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"file_path": {"type": "string"}},
+                        },
+                    },
+                }
+            ],
+            messages=[OpenAIMessage(role="user", content="hello")],
+        )
+    )
+    (ctx,) = translated.additional_context
+    assert ctx.startswith("System instructions:\n")
+    assert "Callable functions:\n- Read: " in ctx
+    assert "reassess the original user request" in ctx
+    assert "immediately emit the next EXT_TOOL block" in ctx
+    assert "Do not require the user to say continue" in ctx
 
 
 def test_translators_include_context_when_enabled() -> None:
@@ -353,32 +383,81 @@ def test_translators_include_context_when_enabled() -> None:
 # --- history trimming on continued turns ---
 
 
-def test_trim_history_preserves_transcript_on_all_turns() -> None:
+def test_trim_history_sends_bootstrap_only_once() -> None:
     ctx = [
-        "System instructions:\nbe nice",
+        "System instructions:\nEXT_TOOL contract and callable tools",
         "Prior conversation transcript:\nUser: a\nAssistant: b",
     ]
-    fresh = PersistentSession()  # turn_count 0
-    assert _trim_history(list(ctx), fresh) == ctx  # first turn keeps everything
+    fresh = PersistentSession()
+    assert _trim_history(list(ctx), fresh) == ctx
+
     continued = PersistentSession()
     continued.turn_count = 3
-    trimmed = _trim_history(list(ctx), continued)
-    assert trimmed == ctx  # transcript is fully preserved and not dropped anymore
+    assert _trim_history(list(ctx), continued) == []
 
 
-def test_trim_history_preserves_tool_results_and_transcript() -> None:
-    """Tool results and transcript must be fully preserved on continued turns."""
+def test_trim_history_keeps_only_current_tool_results_after_bootstrap() -> None:
     ctx = [
-        "System instructions:\nbe nice",
+        "System instructions:\nEXT_TOOL contract and callable tools",
         "Prior conversation transcript:\nUser: read file\nAssistant (tool call): read({})",
         "Tool results:\nEXT_TOOL_OUTPUT: [call_123] <content>Hello, world!</content>",
     ]
-    fresh = PersistentSession()  # turn_count 0
-    assert _trim_history(list(ctx), fresh) == ctx
     continued = PersistentSession()
     continued.turn_count = 3
-    trimmed = _trim_history(list(ctx), continued)
-    assert trimmed == ctx  # fully preserved
+    assert _trim_history(list(ctx), continued) == [
+        "Tool results:\nEXT_TOOL_OUTPUT: [call_123] <content>Hello, world!</content>"
+    ]
+
+
+def test_trim_history_keeps_bootstrap_for_nonpersistent_request() -> None:
+    ctx = ["System instructions:\nEXT_TOOL contract"]
+    assert _trim_history(list(ctx), None) == ctx
+
+
+def test_persistent_tool_loop_never_replays_bootstrap_or_prior_results() -> None:
+    bootstrap = "System instructions:\nEXT_TOOL contract and callable tools"
+    session = PersistentSession()
+    assert _trim_history([bootstrap], session) == [bootstrap]
+
+    session.turn_count = 1
+    first_result = "Tool results:\nEXT_TOOL_OUTPUT: [call_1] first"
+    assert _trim_history([bootstrap, first_result], session) == [first_result]
+
+    session.turn_count = 2
+    second_result = "Tool results:\nEXT_TOOL_OUTPUT: [call_2] second"
+    assert _trim_history([bootstrap, second_result], session) == [second_result]
+    assert "call_1" not in "\n".join(_trim_history([bootstrap, second_result], session))
+
+    session.turn_count = 3
+    assert _trim_history([bootstrap], session) == []
+
+
+def test_disable_context_forwards_only_trailing_openai_tool_results() -> None:
+    translated = translate_openai_request(
+        OpenAIChatRequest(
+            model="m365-opus",
+            messages=[
+                OpenAIMessage(role="user", content="original request"),
+                OpenAIMessage(role="tool", content="old result", tool_call_id="old"),
+                OpenAIMessage(role="assistant", content="working"),
+                OpenAIMessage(role="tool", content="fresh one", tool_call_id="fresh-1"),
+                OpenAIMessage(role="tool", content="fresh two", tool_call_id="fresh-2"),
+            ],
+        )
+    )
+    assert translated.prompt == ""
+    assert translated.additional_context[-1] == (
+        "Tool results:\n"
+        "EXT_TOOL_OUTPUT: [fresh-1] fresh one\n"
+        "EXT_TOOL_OUTPUT: [fresh-2] fresh two"
+    )
+    joined_tool_results = "\n".join(
+        item
+        for item in translated.additional_context
+        if item.startswith("Tool results:\n")
+    )
+    assert "old result" not in joined_tool_results
+    assert "original request" not in joined_tool_results
 
 
 def test_combine_text_leads_with_prompt() -> None:
