@@ -79,6 +79,48 @@ def _is_proxy_model(settings: Settings, model: str | None) -> bool:
     )
 
 
+def _is_title_request(text: str, settings: Settings) -> bool:
+    """Recognize the client's synthetic title-generation turn when history replay is disabled."""
+    if not settings.disable_history_replay:
+        return False
+    normalized = " ".join((text or "").lower().split())
+    return (
+        "write the title in the predominant language" in normalized
+        or "generate a title for this conversation" in normalized
+    )
+
+
+async def _openai_static_stream(model_alias: str, text: str) -> AsyncIterator[str]:
+    completion_id = f"chatcmpl_{uuid.uuid4().hex}"
+    created = int(time.time())
+    for delta, finish_reason in (
+        ({"role": "assistant", "content": text}, None),
+        ({}, "stop"),
+    ):
+        payload = {
+            "id": completion_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": model_alias,
+            "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
+        }
+        yield f"data: {json.dumps(payload)}\n\n"
+    yield "data: [DONE]\n\n"
+
+
+async def _responses_static_stream(model_alias: str, text: str) -> AsyncIterator[str]:
+    resp_id = f"resp_{uuid.uuid4().hex}"
+    item_id = f"msg_{uuid.uuid4().hex}"
+    output = [{
+        "id": item_id,
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "output_text", "text": text}],
+    }]
+    yield f"data: {json.dumps({'type': 'response.output_text.delta', 'item_id': item_id, 'output_index': 0, 'content_index': 0, 'delta': text})}\n\n"
+    yield f"data: {json.dumps({'type': 'response.completed', 'response': {'id': resp_id, 'object': 'response', 'model': model_alias, 'status': 'completed', 'output': output, 'usage': {'input_tokens': 0, 'output_tokens': 0, 'total_tokens': 0}}})}\n\n"
+
+
 def create_app(
     settings: Settings | None = None,
     copilot_client_factory: Callable[[], SubstrateCopilotClient] | None = None,
@@ -238,6 +280,26 @@ def create_app(
             ctx = _trim_history(list(translated.additional_context), session)
             prompt = translated.prompt
 
+            if _is_title_request(prompt, settings):
+                if request.stream:
+                    return StreamingResponse(
+                        _openai_static_stream(settings.model_alias, "No Title"),
+                        media_type="text/event-stream",
+                    )
+                return JSONResponse(
+                    {
+                        "id": f"chatcmpl_{uuid.uuid4().hex}",
+                        "object": "chat.completion",
+                        "created": int(time.time()),
+                        "model": settings.model_alias,
+                        "choices": [{
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "No Title"},
+                            "finish_reason": "stop",
+                        }],
+                    }
+                )
+
             if request.stream:
                 return StreamingResponse(
                     _openai_stream(
@@ -326,6 +388,28 @@ def create_app(
             prompt = translated.prompt
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        if _is_title_request(prompt, settings):
+            if request.stream:
+                return StreamingResponse(
+                    _responses_static_stream(settings.model_alias, "No Title"),
+                    media_type="text/event-stream",
+                )
+            return JSONResponse(
+                {
+                    "id": f"resp_{uuid.uuid4().hex}",
+                    "object": "response",
+                    "created_at": int(time.time()),
+                    "model": settings.model_alias,
+                    "output": [{
+                        "id": f"msg_{uuid.uuid4().hex}",
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "No Title"}],
+                    }],
+                    "usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
+                }
+            )
 
         if request.stream:
             return StreamingResponse(
@@ -509,6 +593,24 @@ def create_app(
             _debug_images(request.messages, images)
             ctx = _trim_history(list(translated.additional_context), session)
             prompt = translated.prompt
+            if _is_title_request(prompt, settings):
+                if request.stream:
+                    return StreamingResponse(
+                        _anthropic_static_stream(settings.model_alias, "No Title"),
+                        media_type="text/event-stream",
+                    )
+                return JSONResponse(
+                    {
+                        "id": f"msg_{uuid.uuid4().hex}",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": settings.model_alias,
+                        "content": [{"type": "text", "text": "No Title"}],
+                        "stop_reason": "end_turn",
+                        "stop_sequence": None,
+                        "usage": {"input_tokens": 0, "output_tokens": 0},
+                    }
+                )
             if prompt.strip().lower() in {"hi", "test"}:
                 if request.stream:
                     return StreamingResponse(

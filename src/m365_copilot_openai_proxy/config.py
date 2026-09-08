@@ -52,7 +52,7 @@ disable_memory = true
 
 # Send only the current message and tool results; omit system and prior conversation context
 # (the proxy injects its own EXT_TOOL contract, plus the client's tool definitions, so tools keep working)
-disable_context = true
+disable_history_replay = true
 
 # SQLite database path for session/conversation store (empty -> ./.sessions/sessions.db)
 session_db_path =
@@ -235,7 +235,7 @@ class Settings(BaseSettings):
     # True -> send only the current message and tool results to substrate. The proxy injects
     # its own EXT_TOOL contract (plus the client's tool definitions) so tools keep working.
     # False -> include system instructions and prior conversation context.
-    disable_context: bool = Field(default=True)
+    disable_history_replay: bool = Field(default=True)
     # SQLite file for the session/conversation store. Empty -> ./.sessions/sessions.db.
     # Tests point this at a tmp file so they never touch the real store.
     session_db_path: str = Field(default="")

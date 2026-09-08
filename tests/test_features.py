@@ -332,8 +332,71 @@ def test_ext_tool_context_includes_client_tools() -> None:
     assert "Do not require the user to say continue" in ctx
 
 
+def test_title_request_returns_no_title_when_context_disabled(tmp_path) -> None:
+    title_prompt = (
+        "Write the title in the predominant language of the session — "
+        "a stray word or code token in another language doesn't change it."
+    )
+
+    fake = FakeCopilotClient()
+    client = _client(fake, tmp_path / "titles.db")
+
+    openai = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "m365-opus",
+            "messages": [{"role": "user", "content": title_prompt}],
+        },
+    )
+    assert openai.status_code == 200
+    assert openai.json()["choices"][0]["message"]["content"] == "No Title"
+
+    responses = client.post(
+        "/v1/responses",
+        json={"model": "m365-opus", "input": title_prompt},
+    )
+    assert responses.status_code == 200
+    assert responses.json()["output"][0]["content"][0]["text"] == "No Title"
+
+    anthropic = client.post(
+        "/v1/messages",
+        json={
+            "model": "m365-opus",
+            "max_tokens": 32,
+            "messages": [{"role": "user", "content": title_prompt}],
+        },
+    )
+    assert anthropic.status_code == 200
+    assert anthropic.json()["content"][0]["text"] == "No Title"
+
+    assert fake.calls == []
+
+
+def test_title_request_reaches_model_when_context_enabled(tmp_path) -> None:
+    fake = FakeCopilotClient()
+    settings = Settings(
+        access_token="fake",
+        persist_default=False,
+        disable_history_replay=False,
+        session_db_path=str(tmp_path / "titles-enabled.db"),
+    )
+    client = TestClient(
+        create_app(settings=settings, copilot_client_factory=lambda: fake)
+    )
+    prompt = "Generate a title for this conversation"
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "m365-opus",
+            "messages": [{"role": "user", "content": prompt}],
+        },
+    )
+    assert response.status_code == 200
+    assert fake.calls[-1][0] == prompt
+
+
 def test_translators_include_context_when_enabled() -> None:
-    settings = Settings(disable_context=False)
+    settings = Settings(disable_history_replay=False)
     openai = translate_openai_request(
         OpenAIChatRequest(
             model="m365-opus",
@@ -432,7 +495,7 @@ def test_persistent_tool_loop_never_replays_bootstrap_or_prior_results() -> None
     assert _trim_history([bootstrap], session) == []
 
 
-def test_disable_context_forwards_only_trailing_openai_tool_results() -> None:
+def test_disable_history_replay_forwards_only_trailing_openai_tool_results() -> None:
     translated = translate_openai_request(
         OpenAIChatRequest(
             model="m365-opus",

@@ -118,7 +118,7 @@ def _join_lines(lines: Iterable[str]) -> str:
     return "\n".join(line for line in lines if line).strip()
 
 
-# `disable_context` drops the client's system prompt entirely, so the proxy injects its own
+# `disable_history_replay` drops the client's system prompt entirely, so the proxy injects its own
 # EXT_TOOL contract: without it the model never emits an EXT_TOOL block and the tool
 # middleware is dead. Client tool definitions are rendered into it so tool names survive too.
 _EXT_TOOL_CONTRACT = """\
@@ -140,7 +140,7 @@ After every EXT_TOOL_OUTPUT, reassess the original user request. If the request 
 
 
 def ext_tool_context(tools: list[StandardToolDefinition]) -> str:
-    """The EXT_TOOL protocol block injected when context is disabled."""
+    """The EXT_TOOL protocol block injected when history replay is disabled."""
     lines = [
         f"- {t.function.name}: {json.dumps(t.function.parameters, ensure_ascii=False)}"
         for t in tools
@@ -222,7 +222,7 @@ def translate_openai_request(request: OpenAIChatRequest, settings: Settings | No
         tool_result_lines = []
 
     additional_context: list[str] = []
-    if not (settings.disable_context if settings is not None else True):
+    if not (settings.disable_history_replay if settings is not None else True):
         system_text = _join_lines(system_lines)
         if system_text:
             additional_context.append(f"System instructions:\n{system_text}")
@@ -247,7 +247,7 @@ def translate_responses_request(
     instructions = request.instructions or ""
     if isinstance(request.input, str):
         additional_context = []
-        if not (settings.disable_context if settings is not None else True):
+        if not (settings.disable_history_replay if settings is not None else True):
             if instructions:
                 additional_context.append(f"System instructions:\n{instructions}")
         else:
@@ -291,7 +291,7 @@ def translate_responses_request(
     if not prompt:
         raise ValueError("No user message found in input.")
     additional_context: list[str] = []
-    if not (settings.disable_context if settings is not None else True):
+    if not (settings.disable_history_replay if settings is not None else True):
         system_text = _join_lines(system_lines)
         if system_text:
             additional_context.append(f"System instructions:\n{system_text}")
@@ -405,7 +405,7 @@ def translate_anthropic_request(
                     break
 
     additional_context: list[str] = []
-    if not (settings.disable_context if settings is not None else True):
+    if not (settings.disable_history_replay if settings is not None else True):
         system_text = _join_lines(system_lines)
         if system_text:
             additional_context.append(f"System instructions:\n{system_text}")
