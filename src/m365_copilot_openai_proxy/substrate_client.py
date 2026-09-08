@@ -492,6 +492,11 @@ def _truncate_substrate_text(text: str, enabled: bool = True) -> str:
 
 
 def _combine_text(prompt: str, context: list[str]) -> str:
+    # Tool continuations are already structured protocol messages. Send them directly instead of
+    # burying them inside the generic reference-context wrapper.
+    if not prompt and context and all(c.startswith("Tool results:\n") for c in context):
+        return "\n".join(c.removeprefix("Tool results:\n") for c in context)
+
     # Lead with the actual request; trailing context is reference only. (Putting a large
     # transcript/workspace dump first buries the real message and the model loses focus.)
     if not context:
@@ -505,7 +510,8 @@ def _combine_text(prompt: str, context: list[str]) -> str:
     if system_inst:
         parts.append("\n\n".join(system_inst))
 
-    parts.append(prompt)
+    if prompt:
+        parts.append(f"User Message:\n{prompt}")
 
     if other_ctx:
         parts.append(

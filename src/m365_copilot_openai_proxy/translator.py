@@ -237,7 +237,10 @@ def translate_openai_request(request: OpenAIChatRequest, settings: Settings | No
         additional_context.append(f"System instructions:\n{ext_tool_context(tools)}")
     tool_results_text = _join_lines(tool_result_lines)
     if tool_results_text:
-        additional_context.append(f"Tool results:\n{tool_results_text}")
+        if not prompt:
+            prompt = tool_results_text
+        else:
+            additional_context.append(f"Tool results:\n{tool_results_text}")
     return TranslatedRequest(prompt=prompt, additional_context=additional_context)
 
 
@@ -418,5 +421,8 @@ def translate_anthropic_request(
         )
     tool_results_text = _join_lines(tool_result_lines)
     if tool_results_text:
-        additional_context.append(f"Tool results:\n{tool_results_text}")
+        if not prompt:
+            prompt = tool_results_text
+        else:
+            additional_context.append(f"Tool results:\n{tool_results_text}")
     return TranslatedRequest(prompt=prompt, additional_context=additional_context)

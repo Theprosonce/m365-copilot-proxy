@@ -508,11 +508,12 @@ def test_disable_history_replay_forwards_only_trailing_openai_tool_results() -> 
             ],
         )
     )
-    assert translated.prompt == ""
-    assert translated.additional_context[-1] == (
-        "Tool results:\n"
+    assert translated.prompt == (
         "EXT_TOOL_OUTPUT: [fresh-1] fresh one\n"
         "EXT_TOOL_OUTPUT: [fresh-2] fresh two"
+    )
+    assert not any(
+        item.startswith("Tool results:\n") for item in translated.additional_context
     )
     joined_tool_results = "\n".join(
         item
@@ -523,10 +524,37 @@ def test_disable_history_replay_forwards_only_trailing_openai_tool_results() -> 
     assert "original request" not in joined_tool_results
 
 
-def test_combine_text_leads_with_prompt() -> None:
+def test_combine_text_labels_user_message_after_system_prompt() -> None:
+    out = _combine_text(
+        "THE REAL MESSAGE",
+        ["System instructions:\nSYSTEM PROMPT"],
+    )
+    assert out == (
+        "System instructions:\nSYSTEM PROMPT\n\n---\n\n"
+        "User Message:\nTHE REAL MESSAGE"
+    )
+
+
+def test_combine_text_keeps_reference_context_after_user_message() -> None:
     out = _combine_text("THE REAL MESSAGE", ["big reference context"])
-    assert out.startswith("THE REAL MESSAGE")
+    assert out.startswith("User Message:\nTHE REAL MESSAGE")
     assert "big reference context" in out
+
+
+def test_combine_text_sends_tool_continuation_directly() -> None:
+    out = _combine_text(
+        "",
+        [
+            "Tool results:\n"
+            "EXT_TOOL_OUTPUT: [call_1] first result\n"
+            "EXT_TOOL_OUTPUT: [call_2] second result"
+        ],
+    )
+    assert out == (
+        "EXT_TOOL_OUTPUT: [call_1] first result\n"
+        "EXT_TOOL_OUTPUT: [call_2] second result"
+    )
+    assert "Reference context" not in out
 
 
 def test_truncate_substrate_text_leaves_short_and_exact_limit_unchanged() -> None:
