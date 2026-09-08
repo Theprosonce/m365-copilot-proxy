@@ -778,14 +778,28 @@ def test_concurrency_semaphore() -> None:
     from m365_copilot_openai_proxy.substrate_client import get_concurrency_semaphore
 
     async def run_test():
-        sem = get_concurrency_semaphore(2)
-        assert sem._value == 2
+        entered: list[int] = []
+        release = asyncio.Event()
 
-        sem2 = get_concurrency_semaphore(2)
-        assert sem is sem2
+        async def worker(index: int) -> None:
+            async with get_concurrency_semaphore(2):
+                entered.append(index)
+                if index < 2:
+                    await release.wait()
 
-        sem3 = get_concurrency_semaphore(3)
-        assert sem3._value == 3
+        tasks = [asyncio.create_task(worker(index)) for index in range(4)]
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert entered == [0, 1]
+
+        release.set()
+        await asyncio.gather(*tasks)
+        assert entered == [0, 1, 2, 3]
+
+        async with get_concurrency_semaphore(3):
+            async with get_concurrency_semaphore(3):
+                async with get_concurrency_semaphore(3):
+                    pass
 
     asyncio.run(run_test())
 

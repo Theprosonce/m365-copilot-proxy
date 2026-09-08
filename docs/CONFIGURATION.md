@@ -29,7 +29,7 @@ The short-lived Microsoft 365 Copilot Substrate access token is not stored in `c
 | **`session_ttl_seconds`** | `0` | Seconds after which unused conversations are automatically evicted from the database/cache. `0` disables time-based eviction. |
 | **`recv_timeout`** | `90` | Handshake and socket frame read timeouts (in seconds) before the proxy gives up. |
 | **`open_timeout`** | `30` | WebSocket handshake open timeout (in seconds). |
-| **`substrate_concurrency_limit`** | `2` | Concurrency limit for Substrate API requests (0 or negative means no limit). |
+| **`substrate_concurrency_limit`** | `2` | Maximum FIFO-queued Substrate requests allowed in flight. Each request waits for a slot before SENT and retains it through the complete RECV; 0 or negative disables the limit. |
 | **`truncation_before_sending`** | `true` | Whether to truncate the combined prompt/context before sending it to Substrate. Set to `false` to send the full text. |
 | **`session_id`** | *empty* | Process-level persistent session identifier (formerly set via the `M365_SESSION` environment variable). Disables temporary/private chats when specified. |
 | **`conversation_id`** | *empty* | Explicit Microsoft 365 Copilot conversation ID to use for the persistent session. Kept separate from the proxy `session_id`. |

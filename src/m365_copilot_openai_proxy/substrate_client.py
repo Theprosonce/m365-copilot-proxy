@@ -47,16 +47,41 @@ _OPEN_TIMEOUT = 30
 MAX_SUBSTRATE_SEND_CHARS = 500_000
 
 
-_SEMAPHORES: dict[asyncio.AbstractEventLoop, asyncio.Semaphore] = {}
+_SUBSTRATE_QUEUES: dict[asyncio.AbstractEventLoop, asyncio.Queue[object]] = {}
+_QUEUE_STOP = object()
 
 
-def get_concurrency_semaphore(limit: int) -> asyncio.Semaphore:
+class _QueuedSubstrateSlot:
+    def __init__(self, queue: asyncio.Queue[object]) -> None:
+        self._queue = queue
+        self._released = False
+
+    async def __aenter__(self) -> "_QueuedSubstrateSlot":
+        await self._queue.get()
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        if not self._released:
+            self._released = True
+            self._queue.task_done()
+            self._queue.put_nowait(object())
+
+
+def get_concurrency_semaphore(limit: int) -> _QueuedSubstrateSlot:
+    """Return a FIFO substrate slot.
+
+    Each request enters the queue before SENT. A slot remains occupied until the
+    complete RECV stream finishes or fails, so no more than ``limit`` requests
+    can be in flight at substrate at once.
+    """
     loop = asyncio.get_running_loop()
-    if loop not in _SEMAPHORES:
-        _SEMAPHORES[loop] = asyncio.Semaphore(limit)
-    elif _SEMAPHORES[loop]._value != limit and not _SEMAPHORES[loop].locked():
-        _SEMAPHORES[loop] = asyncio.Semaphore(limit)
-    return _SEMAPHORES[loop]
+    queue = _SUBSTRATE_QUEUES.get(loop)
+    if queue is None or queue.maxsize != limit:
+        queue = asyncio.Queue(maxsize=limit)
+        for _ in range(limit):
+            queue.put_nowait(object())
+        _SUBSTRATE_QUEUES[loop] = queue
+    return _QueuedSubstrateSlot(queue)
 
 
 _HTTPX_CLIENTS: dict[asyncio.AbstractEventLoop, httpx.AsyncClient] = {}
