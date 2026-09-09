@@ -390,11 +390,13 @@ class SubstrateCopilotClient:
                 )
                 await asyncio.wait_for(ws.recv(), timeout=self._recv_timeout)
                 t_nego = time.perf_counter()
+                sent_text = _truncate_substrate_text(
+                    text, self._truncation_before_sending
+                )
+                print(f"-> SENT:\n{sent_text}", flush=True)
                 await ws.send(
                     self._chat_invoke(
-                        _truncate_substrate_text(
-                            text, self._truncation_before_sending
-                        ),
+                        sent_text,
                         conv_id,
                         session_id,
                         req_id,

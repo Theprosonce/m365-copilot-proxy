@@ -637,8 +637,6 @@ def create_app(
                 "reason": "minimum_native_translation_only"
             })
 
-            print(f"-> SENT:\n{prompt}", flush=True)
-
             log_raw_event("Sent After Modification", {
                 "text": prompt,
                 "additional_context": ctx
