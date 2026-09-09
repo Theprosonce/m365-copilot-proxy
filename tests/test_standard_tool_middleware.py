@@ -156,7 +156,33 @@ def test_malformed_ext_tool_block_rejects_entire_response() -> None:
     )
 
     assert calls is None
-    assert text == 'EXT_TOOL: not valid json\nEXT_TOOL: [{"id":"call_1","name":"Read","arguments":{"file_path":"a.txt"}}] :END_EXT_TOOL'
+    assert text.startswith("EXT_TOOL_FAILURE: JSON parse failed at character 0")
+    assert "near 'not ...'" in text
+    assert text.endswith("Fix the payload and resend the complete EXT_TOOL block.")
+
+
+def test_malformed_ext_tool_returns_failure_without_recovery() -> None:
+    pipeline = ToolMiddlewarePipeline(Settings(access_token="fake"))
+    malformed = 'EXT_TOOL: [{"name":"Bash","arguments":{"command":"run ("stop")"}}] :END_EXT_TOOL'
+
+    calls, text = pipeline.tool_calls_from_text(malformed)
+
+    assert calls is None
+    assert text.startswith("EXT_TOOL_FAILURE: JSON parse failed at character ")
+    assert "... (\"stop..." in text
+    assert text.endswith("Fix the payload and resend the complete EXT_TOOL block.")
+
+
+def test_invalid_tool_arguments_return_failure() -> None:
+    pipeline = ToolMiddlewarePipeline(Settings(access_token="fake"))
+    calls, text = pipeline.tool_calls_from_text(
+        'EXT_TOOL: [{"name":"Read","arguments":"not-json"}] :END_EXT_TOOL'
+    )
+
+    assert calls is None
+    assert text.startswith("EXT_TOOL_FAILURE: arguments for tool 'Read' failed JSON parsing")
+    assert "near 'not-...'" in text
+    assert text.endswith("Fix the payload and resend the complete EXT_TOOL block.")
 
 
 def test_non_tool_call_text_passes_through() -> None:
@@ -167,18 +193,18 @@ def test_non_tool_call_text_passes_through() -> None:
     assert text == "plain answer"
 
 
-def test_failed_example_extracts_tools_between_first_prefix_and_last_suffix() -> None:
+def test_failed_ext_samples_are_rejected_without_recovery() -> None:
     pipeline = ToolMiddlewarePipeline(Settings(access_token="fake"))
-    response = (Path(__file__).parent.parent / "failed_example.txt").read_text()
+    samples = [
+        'EXT_TOOL: [{"name":"Bash","arguments":{"command":"run ("stop")"}}] :END_EXT_TOOL',
+        'EXT_TOOL: [{"name":"Edit","arguments":{"old_string":"call("bad")"}}] :END_EXT_TOOL',
+    ]
 
-    calls, text = pipeline.tool_calls_from_text(response)
+    for sample in samples:
+        calls, text = pipeline.tool_calls_from_text(sample)
 
-    assert text == ""
-    assert calls is not None
-    assert len(calls) == 9
-    assert calls[0].function.name == "Edit"
-    assert calls[-1].function.name == "Write"
-    assert "shadow_boxes_fragment_spv," in calls[-2].function.arguments
+        assert calls is None
+        assert text.startswith("EXT_TOOL_FAILURE: JSON parse failed at character ")
 
 
 def test_markers_do_not_require_surrounding_spaces() -> None:

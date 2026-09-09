@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import re
 import uuid
 from typing import Any
 
@@ -98,17 +97,13 @@ class ToolMiddlewarePipeline:
             return None, text
 
         inner = text[start + len(_TOOL_CALL_PREFIX):end].strip()
-        items = self._loads_tool_calls(inner)
-        if items is None:
-            return None, text
+        try:
+            items = self._loads_tool_calls(inner)
+            calls = [self._tool_call_from_item(item) for item in items]
+        except ValueError as exc:
+            return None, f"EXT_TOOL_FAILURE: {exc}. Fix the payload and resend the complete EXT_TOOL block."
 
-        calls: list[ToolCall] = []
-        for item in items:
-            call = self._tool_call_from_item(item)
-            if call is not None:
-                calls.append(call)
-
-        return (calls or None), ""
+        return calls, ""
 
     def anthropic_content_from_tool_calls(
         self, calls: list[ToolCall] | None, text: str
@@ -127,33 +122,52 @@ class ToolMiddlewarePipeline:
             )
         return content
 
-    def _loads_tool_calls(self, payload: str) -> list[dict[str, Any]] | None:
+    def _loads_tool_calls(self, payload: str) -> list[dict[str, Any]]:
         try:
             data = json.loads(payload)
-        except json.JSONDecodeError:
-            repaired = re.sub(r'\\(?!["\\/bfnrtu])', '', payload)
-            try:
-                data = json.loads(repaired)
-            except json.JSONDecodeError:
-                return None
+        except json.JSONDecodeError as exc:
+            start = max(0, exc.pos - 3)
+            end = min(len(payload), exc.pos + 4)
+            excerpt = payload[start:end].replace("\n", "\\n")
+            if start > 0:
+                excerpt = f"...{excerpt}"
+            if end < len(payload):
+                excerpt = f"{excerpt}..."
+            raise ValueError(
+                f"JSON parse failed at character {exc.pos} near {excerpt!r}: {exc.msg}"
+            ) from exc
         if isinstance(data, dict):
             data = [data]
         if not isinstance(data, list):
-            return None
-        return [item for item in data if isinstance(item, dict)]
+            raise ValueError("tool payload must be a JSON array or object")
+        if not data:
+            raise ValueError("tool payload contains no calls")
+        for index, item in enumerate(data):
+            if not isinstance(item, dict):
+                raise ValueError(f"tool call at index {index} must be a JSON object")
+        return data
 
-    def _tool_call_from_item(self, item: dict[str, Any]) -> ToolCall | None:
+    def _tool_call_from_item(self, item: dict[str, Any]) -> ToolCall:
         name = item.get("name")
         if not isinstance(name, str) or not name.strip():
-            return None
+            raise ValueError("tool call name must be a non-empty string")
         arguments = item.get("arguments", {})
         if isinstance(arguments, str):
             try:
                 arguments = json.loads(arguments or "{}")
-            except json.JSONDecodeError:
-                arguments = {}
+            except json.JSONDecodeError as exc:
+                start = max(0, exc.pos - 3)
+                end = min(len(arguments), exc.pos + 4)
+                excerpt = arguments[start:end].replace("\n", "\\n")
+                if start > 0:
+                    excerpt = f"...{excerpt}"
+                if end < len(arguments):
+                    excerpt = f"{excerpt}..."
+                raise ValueError(
+                    f"arguments for tool {name!r} failed JSON parsing at character {exc.pos} near {excerpt!r}: {exc.msg}"
+                ) from exc
         if not isinstance(arguments, dict):
-            arguments = {}
+            raise ValueError(f"arguments for tool {name!r} must be a JSON object")
         call_id = item.get("id")
         if not isinstance(call_id, str) or not call_id.strip():
             call_id = f"call_{uuid.uuid4().hex[:24]}"
