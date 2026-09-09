@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from m365_copilot_openai_proxy.models import OpenAIResponsesRequest
+from copilot_proxy_server.models import OpenAIResponsesRequest
 
 
 def test_responses_request_accepts_standard_tool_fields() -> None:

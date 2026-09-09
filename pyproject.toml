@@ -1,5 +1,5 @@
 [project]
-name = "m365-copilot-openai-proxy"
+name = "copilot-proxy-server"
 dynamic = ["version"]
 description = "OpenAI-compatible shim for Microsoft 365 Copilot Chat"
 license = "Apache-2.0"
@@ -10,9 +10,6 @@ dependencies = [
     "pydantic-settings>=2.10.0,<3.0.0",
     "uvicorn>=0.35.0,<1.0.0",
     "websockets>=12.0,<15.0",
-    "customtkinter>=5.2.0,<6.0.0",
-    "pystray>=0.19.0,<1.0.0",
-    "pillow>=10.0.0",
 ]
 
 [project.optional-dependencies]
@@ -22,25 +19,25 @@ dev = [
 ]
 
 [project.scripts]
-copilot-openai-proxy = "m365_copilot_openai_proxy.cli:main"
+copilot-proxy-server = "copilot_proxy_server.cli:main"
 
 [build-system]
 requires = ["hatchling>=1.27.0"]
 build-backend = "hatchling.build"
 
-# Single source of truth: version is read from m365_copilot_openai_proxy.__version__.
+# Single source of truth: version is read from copilot_proxy_server.__version__.
 [tool.hatch.version]
-path = "src/m365_copilot_openai_proxy/__init__.py"
+path = "src/copilot_proxy_server/__init__.py"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/m365_copilot_openai_proxy"]
+packages = ["src/copilot_proxy_server"]
 
 # Ship runtime resources from their canonical project locations.
 [tool.hatch.build.targets.wheel.force-include]
-"config/substrate.json" = "m365_copilot_openai_proxy/substrate.json"
-"config/config.ini.template" = "m365_copilot_openai_proxy/config.ini.template"
-"assets/icon.ico" = "m365_copilot_openai_proxy/icon.ico"
-"assets/icon.png" = "m365_copilot_openai_proxy/icon.png"
+"config/substrate.json" = "copilot_proxy_server/substrate.json"
+"config/config.ini.template" = "copilot_proxy_server/config.ini.template"
+"assets/icon.ico" = "copilot_proxy_server/icon.ico"
+"assets/icon.png" = "copilot_proxy_server/icon.png"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

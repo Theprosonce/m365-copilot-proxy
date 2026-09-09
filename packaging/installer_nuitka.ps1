@@ -10,11 +10,11 @@ $root = Resolve-Path (Join-Path $scriptDir "..")
 Set-Location $root
 
 # Single source of truth: read the version from the package (__version__).
-$version = (& "$root\.venv\Scripts\python.exe" -c "import m365_copilot_openai_proxy as m; print(m.__version__)").Trim()
-if (-not $version) { throw "Could not read __version__ from m365_copilot_openai_proxy" }
+$version = (& "$root\.venv\Scripts\python.exe" -c "import copilot_proxy_server as m; print(m.__version__)").Trim()
+if (-not $version) { throw "Could not read __version__ from copilot_proxy_server" }
 $out     = Join-Path $root "dist-nuitka"
 $distDir = Join-Path $out "build_entry.dist"
-$exe     = Join-Path $distDir "m365-copilot-proxy.exe"
+$exe     = Join-Path $distDir "copilot-proxy-server.exe"
 $instOut = Join-Path $root "dist-installer"
 $setup   = Join-Path $instOut "M365CopilotProxy-Setup-$version.exe"
 
@@ -27,26 +27,22 @@ $iscc = @(
 if (-not $iscc) { throw "ISCC.exe not found. Install Inno Setup: winget install JRSoftware.InnoSetup" }
 
 Write-Host "[0/4] Stopping any running instance..." -ForegroundColor Cyan
-Get-Process -Name "m365-copilot-proxy" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Get-Process -Name "copilot-proxy-server" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 2
 
 Write-Host "[1/4] Nuitka --standalone compile (slow: minutes)..." -ForegroundColor Cyan
 & "$root\.venv\Scripts\python.exe" -m nuitka `
     --standalone `
     --windows-console-mode=disable `
-    --enable-plugin=tk-inter `
-    --include-package=m365_copilot_openai_proxy `
-    --include-package-data=m365_copilot_openai_proxy `
+    --include-package=copilot_proxy_server `
+    --include-package-data=copilot_proxy_server `
     --include-package=uvicorn `
-    --include-package=customtkinter `
-    --include-package-data=customtkinter `
-    --include-package=pystray `
     --windows-icon-from-ico="assets\icon.ico" `
     --product-name="M365 Copilot Proxy" `
     --product-version=$version `
     --company-name="MassimilianoPili" `
     --output-dir="$out" `
-    --output-filename="m365-copilot-proxy.exe" `
+    --output-filename="copilot-proxy-server.exe" `
     --assume-yes-for-downloads `
     --remove-output `
     packaging\build_entry.py

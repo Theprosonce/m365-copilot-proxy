@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # Install uv if needed, install this project, then start the proxy.
 # Usage:
-#   ./scripts/setup.sh            # start tray GUI
+#   ./scripts/setup.sh            # start headless API (default)
 #   ./scripts/setup.sh serve      # start headless API
-#   ./scripts/setup.sh serve --no-launch-edge
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -23,4 +22,4 @@ if ! command -v uv >/dev/null 2>&1; then
 fi
 
 uv sync
-exec uv run copilot-openai-proxy "$@"
+exec uv run copilot-proxy-server "$@"

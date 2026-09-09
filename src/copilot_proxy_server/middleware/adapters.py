@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from m365_copilot_openai_proxy.models import FunctionCall, ToolCall
+from copilot_proxy_server.models import FunctionCall, ToolCall
 from .models import (
     StandardFunctionCall,
     StandardToolCall,

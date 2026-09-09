@@ -47,9 +47,8 @@ timing = false
 substrate_config_path =
 
 # Browser settings
-edge_headless = false
-edge_path = C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe
-prefer_active_browser = true
+# Remote Chromium CDP base URL; empty uses localhost and cdp_port
+browser_cdp_url =
 
 # OAuth / Auth state (automatically populated/refreshed)
 refresh_token =
@@ -63,7 +62,6 @@ session_salt =
 ws_reuse = false
 
 # Automatically close capture window on success
-hide_on_token_success = true
 
 # Anthropic Passthrough settings
 anthropic_passthrough = false
@@ -77,19 +75,17 @@ host = 127.0.0.1
 port = 8000
 cdp_port = 9222
 auto_refresh = true
-launch_edge = true
 capture_on_start = true
 capture_timeout_seconds = 180
 refresh_before_seconds = 900
 refresh_retry_seconds = 60
 configure_clients = true
+# Start Chromium with Docker Compose on serve and stop it when serve exits
+manage_chromium = true
 
 [capture_token]
 cdp_port = 9222
 timeout_seconds = 60
-
-[launch_edge]
-cdp_port = 9222
 
 [configure]
 undo = false

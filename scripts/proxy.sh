@@ -11,7 +11,7 @@
 #
 # We don't PyInstaller-build a binary here: Mark-of-the-Web exists only on
 # Windows, so running from source via the venv is the simplest path. For an
-# interactive (foreground, tray/serve) run, use run.sh instead.
+# interactive foreground run, use run.sh instead.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -34,8 +34,8 @@ if [ -n "$PID" ]; then
     echo "[M365 Proxy] running on :$PORT (pid $PID) - STOPPING..."
     # Match the Python module name and the console-script entry; same kill-by-name
     # spirit as proxy.ps1 / proxy-toggle.bat. Idempotent.
-    pkill -f 'm365_copilot_openai_proxy' 2>/dev/null || true
-    pkill -f 'copilot-openai-proxy'      2>/dev/null || true
+    pkill -f 'copilot_proxy_server' 2>/dev/null || true
+    pkill -f 'copilot-proxy-server'      2>/dev/null || true
     sleep 1
     echo "[M365 Proxy] stopped."
     exit 0
@@ -61,7 +61,7 @@ echo "[M365 Proxy] starting from source (background, log: .sessions/proxy.log)..
 : > .sessions/proxy.log
 M365_TIME_ZONE="Europe/Rome" \
 M365_WORK_GROUNDING="false" \
-nohup ./.venv/bin/python -m m365_copilot_openai_proxy serve > .sessions/proxy.log 2>&1 &
+nohup ./.venv/bin/python -m copilot_proxy_server serve > .sessions/proxy.log 2>&1 &
 BG_PID=$!
 disown "$BG_PID" 2>/dev/null || true
 

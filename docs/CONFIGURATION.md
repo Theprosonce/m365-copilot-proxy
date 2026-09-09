@@ -5,9 +5,8 @@ On first run, if `config.ini` is missing, the proxy will automatically create it
 ## Configuration Sections
 
 *   **`[settings]`** — Core operational parameters, session policies, paths, and integration credentials.
-*   **`[serve]`** — API server parameters, address/port bindings, and auto-refresh browser controls.
+*   **`[serve]`** — API server parameters, address/port bindings, and remote CDP auto-refresh controls.
 *   **`[capture_token]`** — Controls for the dedicated `capture-token` CLI utility.
-*   **`[launch_edge]`** — Controls for the dedicated `launch-edge` CLI utility.
 *   **`[configure]`** — Client integration setup helpers.
 
 ---
@@ -36,11 +35,8 @@ The short-lived Microsoft 365 Copilot Substrate access token is not stored in `c
 | **`session_salt`** | *empty* | Salt used for the automatic client conversation fingerprinting. Set a custom value to ensure hashes remain stable across restarts. |
 | **`debug`** | `false` | Writes detailed request and response payloads, logs, and diagnostics to `.sessions/debug.log`. |
 | **`timing`** | `false` | Enables extra diagnostic latency and response timing logs. |
-| **`edge_headless`** | `false` | True launches Edge/Firefox in headless mode for auto-token refresh (no visible window). |
-| **`edge_path`** | `C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe` | Absolute path to the browser executable (Edge, Chrome, Chromium, or Firefox). |
-| **`prefer_active_browser`** | `true` | When true, searches for and prefers actively running browsers on the system from the prioritized list. |
 | **`ws_reuse`** | `false` | True keeps a single WebSocket alive per persistent session to skip handshakes. |
-| **`hide_on_token_success`**| `true` | Automatically close or hide the debug browser window once a fresh token is acquired. |
+| **`browser_cdp_url`** | *empty* | Remote Chromium CDP base URL (for example `http://127.0.0.1:9222` or `http://chromium:9222`). When empty, the proxy uses `http://localhost:<cdp_port>`. |
 | **`substrate_config_path`** | *empty* | Custom local file override for the substrate configuration JSON. |
 
 ### OAuth / Refresh State (Auto-Populated)
@@ -65,25 +61,23 @@ These settings allow sending non-M365 model queries directly to Anthropic:
 | :--- | :--- | :--- |
 | **`host`** | `127.0.0.1` | The local IP address to bind the FastAPI proxy server to. |
 | **`port`** | `8000` | The port the proxy server listens on. |
-| **`cdp_port`** | `9222` | The port used by Chrome DevTools Protocol to attach to the Edge browser process. |
+| **`cdp_port`** | `9222` | Fallback Chrome DevTools Protocol port when `browser_cdp_url` is not set. |
 | **`auto_refresh`** | `true` | Automatically run background token refreshing routines before token expiration. |
-| **`launch_edge`** | `true` | Launch Edge automatically on startup to capture/refresh tokens. |
 | **`capture_on_start`** | `true` | Attempt to capture a token immediately on startup if none is present or if the current token is expired. |
-| **`capture_timeout_seconds`**| `180` | Maximum seconds to wait for a successful Edge CDP capture on startup. |
+| **`capture_timeout_seconds`**| `180` | Maximum seconds to wait for a successful remote Chromium CDP capture on startup. |
 | **`refresh_before_seconds`** | `900` | Seconds before expiration to trigger a background token refresh (default: 15 minutes). |
 | **`refresh_retry_seconds`** | `60` | Delay in seconds before retrying a failed token refresh. |
 | **`configure_clients`** | `true` | Attempt to auto-configure local tools (like Claude Code and VS Code settings) on start. |
+| **`manage_chromium`** | `true` | Start the bundled Docker Chromium service before serving and stop that service when `serve` exits. Startup fails if Docker Compose or the Chromium service is unavailable. |
 
 ---
 
-## 3. Capturing / Launch Helpers (`[capture_token]`, `[launch_edge]`, `[configure]`)
+## 3. Capture and Configuration Helpers (`[capture_token]`, `[configure]`)
 
 These sections control specific command overrides:
 
 *   **`[capture_token]`**:
     *   `cdp_port` (`9222`) — Chrome DevTools Protocol port.
     *   `timeout_seconds` (`60`) — Token capture timeout.
-*   **`[launch_edge]`**:
-    *   `cdp_port` (`9222`) — Chrome DevTools Protocol port.
 *   **`[configure]`**:
     *   `undo` (`false`) — Undo client integrations.

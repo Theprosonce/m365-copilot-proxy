@@ -43,7 +43,7 @@ If you already have `uv` installed, the equivalent manual commands are:
 
 ```powershell
 uv sync
-uv run copilot-openai-proxy serve
+uv run copilot-proxy-server serve
 ```
 
 The server starts at:
@@ -52,15 +52,28 @@ The server starts at:
 http://127.0.0.1:8000
 ```
 
-On first run, the proxy opens a dedicated Browser window. Sign in to M365 Copilot there once. The proxy will capture the required Substrate token and write it to `.env` as `M365_ACCESS_TOKEN`.
+By default, `serve` starts the bundled Docker Chromium service before hosting the API and stops that service when it exits. Docker Compose is required; startup fails if Chromium cannot be started.
 
-The dedicated browser profile is stored at:
+On first run, open the Chromium noVNC page, sign in to M365 Copilot, and keep the Copilot tab open. The proxy captures the Substrate token from that CDP session and writes it to `.env` as `M365_ACCESS_TOKEN`.
 
-```text
-.\.sessions\edge-profile
+If startup says it is waiting for a token, click the Copilot message box in Chromium and type one character. You do not need to send the message.
+
+### Docker-hosted Chromium (default)
+
+Set the CDP endpoint in `config.ini`:
+
+```ini
+[settings]
+browser_cdp_url = http://127.0.0.1:9222
 ```
 
-If startup says it is waiting for a token, click the Copilot message box and type one character. You do not need to send the message.
+Open [http://127.0.0.1:6080/vnc.html](http://127.0.0.1:6080/vnc.html), sign in to M365 Copilot once, and keep that profile. The proxy uses Docker Chromium the same way it uses a direct local browser.
+
+To use an externally managed browser instead, disable container management:
+
+```bash
+uv run copilot-proxy-server serve --no-manage-chromium
+```
 
 ### Run from source (no .exe)
 
@@ -68,21 +81,21 @@ Use this on machines where the signed release binaries are blocked by Applicatio
 
 ```powershell
 # clone, then from the repo root:
-powershell -ExecutionPolicy Bypass -File .\scripts\run.ps1            # tray GUI (bare invocation)
+powershell -ExecutionPolicy Bypass -File .\scripts\run.ps1            # headless API (default)
 powershell -ExecutionPolicy Bypass -File .\scripts\run.ps1 serve      # headless API
 ```
 
 ```bash
-./scripts/run.sh            # tray GUI (needs a desktop + python3-tk)
+./scripts/run.sh            # headless API (default)
 ./scripts/run.sh serve      # headless API
 ```
 
 The scripts use `uv` when available, otherwise fall back to a local `.venv` + `pip install -e .`. Equivalent one-liners without the scripts:
 
 ```bash
-uv run copilot-openai-proxy serve
+uv run copilot-proxy-server serve
 # or, without uv (after `pip install -e .`):
-python -m m365_copilot_openai_proxy serve
+python -m copilot_proxy_server serve
 ```
 
 ### Project layout
@@ -101,8 +114,8 @@ the runtime is in place before the first start.
 | `scripts/proxy.ps1` *(recommended on Windows)* | Windows | Toggle on/off; build the standalone exe if missing, then start it headless. `.\scripts\proxy.ps1` toggles, `.\scripts\proxy.ps1 -ForceBuild` rebuilds first. Locally built → no Mark-of-the-Web → no SmartScreen prompt. |
 | `scripts/proxy.sh` *(recommended on macOS / Linux)* | macOS / Linux | Toggle on/off; create the `.venv` + editable install on first start, then run headless from source in background. `./scripts/proxy.sh --reinstall` forces a fresh `pip install -e .`. |
 | `scripts/proxy-toggle.bat` | Windows | Simple toggle on/off of the venv console script. No build step — assumes `.venv` is already set up. |
-| `packaging/build-exe.ps1` | Windows | Explicit PyInstaller build of `dist\m365-copilot-proxy.exe`, self-signed. Called automatically by `scripts/proxy.ps1` when the exe is missing. |
-| `scripts/run.ps1` / `scripts/run.sh` | All | Foreground run from source (tray GUI or `serve`). Use these for dev, not for "fire and forget". |
+| `packaging/build-exe.ps1` | Windows | Explicit PyInstaller build of `dist\copilot-proxy-server.exe`, self-signed. Called automatically by `scripts/proxy.ps1` when the exe is missing. |
+| `scripts/run.ps1` / `scripts/run.sh` | All | Foreground run from source (`serve`). Use these for dev, not for "fire and forget". |
 
 ```powershell
 # Windows
@@ -326,16 +339,16 @@ M365 Copilot browser tokens usually expire in about 1 hour. The proxy refreshes 
 Auto-refresh is on by default:
 
 ```powershell
-uv run copilot-openai-proxy serve
+uv run copilot-proxy-server serve
 ```
 
 Useful controls:
 
 ```powershell
-uv run copilot-openai-proxy serve --refresh-before-seconds 300
-uv run copilot-openai-proxy serve --no-auto-refresh
-uv run copilot-openai-proxy serve --no-capture-on-start
-uv run copilot-openai-proxy serve --no-launch-edge
+uv run copilot-proxy-server serve --refresh-before-seconds 300
+uv run copilot-proxy-server serve --no-auto-refresh
+uv run copilot-proxy-server serve --no-capture-on-start
+uv run copilot-proxy-server serve
 ```
 
 You can also press `r` in the server console to refresh the token manually.
@@ -343,7 +356,7 @@ You can also press `r` in the server console to refresh the token manually.
 ### Manual Fallback
 
 ```powershell
-uv run copilot-openai-proxy set-token
+uv run copilot-proxy-server set-token
 ```
 
 Then paste a fresh Substrate WebSocket URL:

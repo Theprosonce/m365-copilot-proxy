@@ -80,9 +80,8 @@ timing = false
 # Path overrides
 substrate_config_path =
 # Browser settings
-edge_headless = false
-edge_path = C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe
-prefer_active_browser = true
+# Remote Chromium CDP base URL; empty uses localhost and cdp_port
+browser_cdp_url =
 
 # OAuth / Auth state (automatically populated/refreshed)
 refresh_token =
@@ -96,7 +95,6 @@ session_salt =
 ws_reuse = false
 
 # Automatically close capture window on success
-hide_on_token_success = true
 
 # Anthropic Passthrough settings
 anthropic_passthrough = false
@@ -110,19 +108,16 @@ host = 127.0.0.1
 port = 8000
 cdp_port = 9222
 auto_refresh = true
-launch_edge = true
 capture_on_start = true
 capture_timeout_seconds = 180
 refresh_before_seconds = 900
 refresh_retry_seconds = 60
 configure_clients = true
+manage_chromium = true
 
 [capture_token]
 cdp_port = 9222
 timeout_seconds = 60
-
-[launch_edge]
-cdp_port = 9222
 
 [configure]
 undo = false
@@ -279,24 +274,13 @@ class Settings(BaseSettings):
         default=100000, alias="M365_DEBUG_TOOLING_RAW_LOG_MAX_CHARS"
     )
     substrate_config_path: str = Field(default="")
-    edge_headless: bool = Field(default=False)
+    browser_cdp_url: str = Field(default="")
     refresh_token: str = Field(default="")
     tenant_id: str = Field(default="")
     client_id: str = Field(default="")
     # True -> keep one substrate WebSocket alive per persistent session (skips the per-turn
     # handshake). Default off until validated against substrate (see Workstream A).
     ws_reuse: bool = Field(default=False)
-    # True -> automatically close/hide the debug browser window when a token is successfully acquired.
-    hide_on_token_success: bool = Field(
-        default=True
-    )
-    # Path to the Edge executable used for the debug token-capture window.
-    edge_path: str = Field(
-        default=r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
-    )
-    prefer_active_browser: bool = Field(
-        default=True,
-    )
     # Passthrough: models NOT recognized as ours (m365-*) are forwarded to the real Anthropic API
     # on /v1/messages, instead of being routed to substrate. Off by default.
     anthropic_passthrough: bool = Field(
@@ -317,7 +301,6 @@ class Settings(BaseSettings):
     serve_port: int = Field(default=8000)
     serve_cdp_port: int = Field(default=9222)
     serve_auto_refresh: bool = Field(default=True)
-    serve_launch_edge: bool = Field(default=True)
     serve_capture_on_start: bool = Field(default=True)
     serve_capture_timeout_seconds: int = Field(
         default=180
@@ -327,13 +310,13 @@ class Settings(BaseSettings):
         default=60
     )
     serve_configure_clients: bool = Field(default=True)
+    serve_manage_chromium: bool = Field(default=True)
 
     # Capture / browser command defaults.
     capture_token_cdp_port: int = Field(default=9222)
     capture_token_timeout_seconds: int = Field(
         default=60
     )
-    launch_edge_cdp_port: int = Field(default=9222)
     configure_undo: bool = Field(default=False)
 
 

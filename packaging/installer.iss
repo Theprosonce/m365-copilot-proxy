@@ -8,7 +8,7 @@
 #ifndef AppVersion
   #define AppVersion "0.0.0"
 #endif
-#define AppExe "m365-copilot-proxy.exe"
+#define AppExe "copilot-proxy-server.exe"
 #define AppPublisher "MassimilianoPili"
 #ifndef PayloadDir
   #define PayloadDir "..\dist-nuitka\build_entry.dist"
@@ -36,7 +36,7 @@ OutputBaseFilename=M365CopilotProxy-Setup-{#AppVersion}
 WizardStyle=modern
 
 [Tasks]
-Name: "startup"; Description: "Avvia all'accesso (consigliato per un'app da tray)"; GroupDescription: "Avvio:"; Flags: checkedonce
+Name: "startup"; Description: "Avvia all'accesso (consigliato)"; GroupDescription: "Avvio:"; Flags: checkedonce
 
 [Files]
 Source: "{#PayloadDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion

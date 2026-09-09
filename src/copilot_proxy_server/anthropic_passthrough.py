@@ -130,7 +130,7 @@ def _upstream_headers(settings: Any, client_headers: Any) -> dict[str, str]:
         "Accept": "application/json, text/event-stream",
         "Accept-Encoding": "identity",  # no gzip -> clean SSE passthrough
         "Content-Type": "application/json",
-        "User-Agent": "m365-copilot-proxy/passthrough",
+        "User-Agent": "copilot-proxy-server/passthrough",
     }
     api_key = (getattr(settings, "anthropic_key", "") or "").strip()
     if api_key:

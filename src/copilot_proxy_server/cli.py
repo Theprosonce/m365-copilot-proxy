@@ -6,12 +6,14 @@ import json
 import logging
 import os
 import re
-import shutil
+import shlex
+import signal
 import subprocess
 import sys
 import threading
 import time
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 try:
     import msvcrt
@@ -76,10 +78,48 @@ _CDP_NUDGE_JS = """
 """
 
 
+def _cdp_base_url(port: int) -> str:
+    configured = Settings().browser_cdp_url.strip()
+    return configured.rstrip("/") if configured else f"http://localhost:{port}"
+
+
+def _cdp_http_url(port: int, path: str) -> str:
+    return f"{_cdp_base_url(port)}/{path.lstrip('/')}"
+
+
+def _cdp_websocket_url(port: int, ws_url: str) -> str:
+    configured = Settings().browser_cdp_url.strip()
+    ws = urlsplit(ws_url)
+    if configured:
+        cdp = urlsplit(configured)
+        scheme = "wss" if cdp.scheme == "https" else "ws"
+        return urlunsplit((scheme, cdp.netloc, ws.path, ws.query, ws.fragment))
+
+    # Docker Chromium commonly reports 0.0.0.0 in webSocketDebuggerUrl.
+    # Normalize to localhost so host-side clients can connect like direct browser mode.
+    if ws.hostname in {"0.0.0.0", "::"}:
+        netloc = f"localhost:{port}"
+        return urlunsplit((ws.scheme or "ws", netloc, ws.path, ws.query, ws.fragment))
+    return ws_url
+
+
+def _cdp_debug_tabs(port: int) -> list[dict] | None:
+    try:
+        with httpx.Client(timeout=1) as client:
+            return client.get(_cdp_http_url(port, "/json")).json()
+    except Exception:
+        return None
+
+
+def _edge_debug_tabs(cdp_port: int) -> list[dict] | None:
+    """Compatibility alias for older call sites."""
+    return _cdp_debug_tabs(cdp_port)
+
+
 async def _cdp_extract_token(port: int, *, allow_nudge: bool = True) -> str | None:
     try:
         async with httpx.AsyncClient(timeout=1) as client:
-            tabs = (await client.get(f"http://localhost:{port}/json")).json()
+            tabs = (await client.get(_cdp_http_url(port, "/json"))).json()
     except Exception:
         return None
 
@@ -88,7 +128,7 @@ async def _cdp_extract_token(port: int, *, allow_nudge: bool = True) -> str | No
         return None
 
     try:
-        async with websockets.connect(tab["webSocketDebuggerUrl"]) as ws:
+        async with websockets.connect(_cdp_websocket_url(port, tab["webSocketDebuggerUrl"])) as ws:
             await ws.send(
                 json.dumps(
                     {
@@ -115,7 +155,7 @@ async def _cdp_capture_websocket_token(port: int, timeout_seconds: int) -> str |
     while asyncio.get_running_loop().time() < deadline:
         try:
             async with httpx.AsyncClient(timeout=3) as client:
-                tabs = (await client.get(f"http://localhost:{port}/json")).json()
+                tabs = (await client.get(_cdp_http_url(port, "/json"))).json()
         except Exception:
             await asyncio.sleep(1)
             continue
@@ -126,7 +166,7 @@ async def _cdp_capture_websocket_token(port: int, timeout_seconds: int) -> str |
             continue
 
         try:
-            async with websockets.connect(tab["webSocketDebuggerUrl"]) as ws:
+            async with websockets.connect(_cdp_websocket_url(port, tab["webSocketDebuggerUrl"])) as ws:
                 await ws.send(json.dumps({"id": 1, "method": "Network.enable"}))
                 # Reload the page so the app deterministically opens a fresh authenticated
                 # websocket (an idle tab won't create one on its own).
@@ -187,7 +227,7 @@ def _wait_for_m365_page(cdp_port: int, timeout_seconds: int) -> bool:
     while time.time() < deadline:
         try:
             with httpx.Client(timeout=1) as client:
-                tabs = client.get(f"http://localhost:{cdp_port}/json").json()
+                tabs = client.get(_cdp_http_url(cdp_port, "/json")).json()
         except Exception:
             time.sleep(0.5)
             continue
@@ -214,65 +254,18 @@ def _needs_substrate_token(token: str | None) -> bool:
         return True
 
 
-async def _cdp_close_browser(port: int) -> None:
-    try:
-        async with httpx.AsyncClient(timeout=1) as client:
-            resp = await client.get(f"http://localhost:{port}/json/version")
-            data = resp.json()
-        ws_url = data.get("webSocketDebuggerUrl")
-        if ws_url:
-            async with websockets.connect(ws_url) as ws:
-                await ws.send(json.dumps({"id": 1, "method": "Browser.close"}))
-                try:
-                    await asyncio.wait_for(ws.recv(), timeout=1)
-                except Exception:
-                    pass
-    except Exception:
-        pass
-
-
-def _close_debug_browser(port: int) -> None:
-    try:
-        if Settings().prefer_active_browser:
-            browser_path = _resolve_debug_browser_path()
-            if _is_browser_process_running(browser_path):
-                print("prefer_active_browser is enabled and browser is running; overriding close/hide to keep browser open.")
-                return
-    except Exception:
-        pass
-
-    hide_val = read_config_value("hide_on_token_success")
-    if hide_val is None:
-        hide_val = read_config_value("hide_on_token_success")
-    if hide_val is None:
-        hide = True
-    else:
-        hide = hide_val.strip().lower() in ("1", "true", "yes", "on")
-
-    if not hide:
-        return
-
-    try:
-        asyncio.run(_cdp_close_browser(port))
-        print("Successfully closed debug browser on token success.")
-    except Exception as exc:
-        print(f"Note: Could not close debug browser: {exc}")
-
-
 def _startup_capture_loop(cdp_port: int, timeout_seconds: int) -> None:
-    print("Waiting for the debug Edge M365 tab...")
+    print("Waiting for the remote Chromium M365 tab...")
     _wait_for_m365_page(cdp_port, min(timeout_seconds, 30))
-    print("Trying to refresh Substrate token from the debug Edge tab...")
+    print("Trying to refresh Substrate token from the remote Chromium tab...")
     if _try_auto_refresh(cdp_port):
-        _close_debug_browser(cdp_port)
         return
-    print("Waiting for a Substrate token from the debug Edge M365 Copilot tab...")
+    print("Waiting for a Substrate token from the remote Chromium M365 Copilot tab...")
     print(
         "If needed: press F5 in Copilot, click the message box, and type one character."
     )
     if _capture_token_to_env(cdp_port, timeout_seconds):
         print(".env updated with Substrate token.")
-        _close_debug_browser(cdp_port)
     else:
         print("Startup token capture timed out. Manual set-token is still available.")
 
@@ -368,14 +361,14 @@ _MSAL_READ_JS = r"""
 async def _read_msal_via_cdp(port: int) -> dict | None:
     try:
         async with httpx.AsyncClient(timeout=2) as client:
-            tabs = (await client.get(f"http://localhost:{port}/json")).json()
+            tabs = (await client.get(_cdp_http_url(port, "/json"))).json()
     except Exception:
         return None
     tab = _find_m365_page(tabs)
     if not tab:
         return None
     try:
-        async with websockets.connect(tab["webSocketDebuggerUrl"], max_size=None) as ws:
+        async with websockets.connect(_cdp_websocket_url(port, tab["webSocketDebuggerUrl"]), max_size=None) as ws:
             await ws.send(
                 json.dumps(
                     {
@@ -511,7 +504,7 @@ def _auto_refresh_loop(
             stop_event.wait(wait_seconds)
             continue
 
-        print(f"Token expires in {max(remaining, 0)} seconds; refreshing from Edge...")
+        print(f"Token expires in {max(remaining, 0)} seconds; refreshing via remote CDP...")
         if not _try_auto_refresh(cdp_port):
             print("Auto-refresh failed; will retry later.")
         stop_event.wait(retry_seconds)
@@ -533,7 +526,7 @@ def main() -> None:
     _attach_parent_console()
     settings = Settings()
     parser = argparse.ArgumentParser(
-        prog="copilot-openai-proxy",
+        prog="copilot-proxy-server",
         description="M365 Copilot <-> OpenAI/Anthropic proxy. Bare invocation defaults to 'serve'.",
     )
     # Not required: a bare invocation (e.g. double-clicking the .exe) defaults to `serve`.
@@ -542,17 +535,14 @@ def main() -> None:
     subparsers.add_parser(
         "set-token", help="paste a substrate access token or WebSocket URL into .env"
     ).set_defaults(func=set_token_command)
-    subparsers.add_parser(
-        "check", help="analyse installed browsers and test the configured priority"
-    ).set_defaults(func=check_command)
     capture_parser = subparsers.add_parser(
-        "capture-token", help="listen for a substrate token via Edge CDP"
+        "capture-token", help="listen for a substrate token via remote CDP"
     )
     capture_parser.add_argument(
         "--cdp-port",
         type=int,
         default=settings.capture_token_cdp_port,
-        help=f"Edge remote-debugging port (default: {settings.capture_token_cdp_port})",
+        help=f"remote CDP port (default: {settings.capture_token_cdp_port})",
     )
     capture_parser.add_argument(
         "--timeout-seconds",
@@ -561,17 +551,6 @@ def main() -> None:
         help=f"give up after this many seconds (default: {settings.capture_token_timeout_seconds})",
     )
     capture_parser.set_defaults(func=capture_token_command)
-
-    launch_parser = subparsers.add_parser(
-        "launch-edge", help="open the dedicated debug Edge window for M365 Copilot"
-    )
-    launch_parser.add_argument(
-        "--cdp-port",
-        type=int,
-        default=settings.launch_edge_cdp_port,
-        help=f"Edge remote-debugging port (default: {settings.launch_edge_cdp_port})",
-    )
-    launch_parser.set_defaults(func=launch_edge_command)
 
     serve_parser = subparsers.add_parser(
         "serve", help="start the proxy server (default when no command is given)"
@@ -591,7 +570,7 @@ def main() -> None:
         "--cdp-port",
         type=int,
         default=settings.serve_cdp_port,
-        help=f"Edge remote-debugging port (default: {settings.serve_cdp_port})",
+        help=f"remote CDP port (default: {settings.serve_cdp_port})",
     )
     serve_parser.add_argument(
         "--auto-refresh",
@@ -599,13 +578,6 @@ def main() -> None:
         action=argparse.BooleanOptionalAction,
         default=settings.serve_auto_refresh,
         help=f"enable automatic token refresh (default: {settings.serve_auto_refresh})",
-    )
-    serve_parser.add_argument(
-        "--launch-edge",
-        dest="launch_edge",
-        action=argparse.BooleanOptionalAction,
-        default=settings.serve_launch_edge,
-        help=f"open a debug Edge window on start (default: {settings.serve_launch_edge})",
     )
     serve_parser.add_argument(
         "--capture-on-start",
@@ -639,6 +611,13 @@ def main() -> None:
         default=settings.serve_configure_clients,
         help=f"wire Claude Code/VS Code to the proxy on start (default: {settings.serve_configure_clients})",
     )
+    serve_parser.add_argument(
+        "--manage-chromium",
+        dest="manage_chromium",
+        action=argparse.BooleanOptionalAction,
+        default=settings.serve_manage_chromium,
+        help=f"manage docker chromium lifecycle with serve (default: {settings.serve_manage_chromium})",
+    )
     serve_parser.set_defaults(func=serve_command)
 
     configure_parser = subparsers.add_parser(
@@ -653,315 +632,16 @@ def main() -> None:
     )
     configure_parser.set_defaults(func=configure_command)
 
-    subparsers.add_parser(
-        "tray", help="open the tray app (default when double-clicked)"
-    ).set_defaults(func=tray_command)
-
     args = parser.parse_args()
     if not getattr(args, "command", None):
-        # Bare run (double-click) -> tray app; fall back to console serve if the GUI deps are missing.
-        try:
-            from .tray_app import run_tray
-
-            run_tray()
-            return
-        except Exception as exc:
-            print(f"(tray app unavailable: {exc}; falling back to console serve)")
-            args = parser.parse_args(["serve"])
+        args = parser.parse_args(["serve"])
     try:
         args.func(args)
     except KeyboardInterrupt:
         # Clean exit on Ctrl+C (cleanup already ran in serve_command's finally) — no traceback.
         pass
-
-
-def launch_edge_command(args: argparse.Namespace) -> None:
-    _launch_debug_edge(args.cdp_port)
-
-
-_DEFAULT_EDGE_PATH = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
-_LINUX_BROWSER_PRIORITY = (
-    "chromium",
-    "chromium-browser",
-    "google-chrome",
-    "google-chrome-stable",
-    "chrome",
-    "microsoft-edge",
-    "microsoft-edge-stable",
-    "firefox",
-)
-
-
-def _is_browser_process_running(browser_path: str) -> bool:
-    name = Path(browser_path).name.lower()
-    if os.name == "nt":
-        try:
-            res = subprocess.run(["tasklist", "/NH", "/FI", f"IMAGENAME eq {name}"], capture_output=True, text=True)
-            if name in res.stdout.lower():
-                return True
-            if "edge" in name:
-                res = subprocess.run(["tasklist", "/NH", "/FI", "IMAGENAME eq msedge.exe"], capture_output=True, text=True)
-                if "msedge.exe" in res.stdout.lower():
-                    return True
-        except Exception:
-            pass
-        return False
-
-    try:
-        search_terms = [name]
-        if "edge" in name:
-            search_terms.append("msedge")
-        if "chrome" in name:
-            search_terms.append("chrome")
-
-        for term in search_terms:
-            res = subprocess.run(["pgrep", "-f", term], capture_output=True)
-            if res.returncode == 0:
-                return True
-    except Exception:
-        pass
-    return False
-
-
-def _analyse_installed_browsers() -> dict[str, str | None]:
-    categories = {
-        "chromium": ["chromium", "chromium-browser"],
-        "chrome": ["google-chrome", "google-chrome-stable", "chrome"],
-        "edge": ["microsoft-edge", "microsoft-edge-stable"],
-        "firefox": ["firefox"],
-    }
-    results = {}
-    for cat, candidates in categories.items():
-        found_path = None
-        for candidate in candidates:
-            resolved = shutil.which(candidate)
-            if resolved:
-                found_path = resolved
-                break
-        results[cat] = found_path
-    return results
-
-
-def _attempt_install_chromium() -> None:
-    print("No supported browser (chromium, chrome, edge, firefox) found installed on this system.")
-    print("Attempting to automatically install Chromium...")
-
-    commands = []
-    if shutil.which("apt-get"):
-        commands.append(["sudo", "apt-get", "update"])
-        commands.append(["sudo", "apt-get", "install", "-y", "chromium-browser"])
-    elif shutil.which("snap"):
-        commands.append(["sudo", "snap", "install", "chromium"])
-    elif shutil.which("dnf"):
-        commands.append(["sudo", "dnf", "install", "-y", "chromium"])
-    elif shutil.which("pacman"):
-        commands.append(["sudo", "pacman", "-S", "--noconfirm", "chromium"])
-    elif shutil.which("apk"):
-        commands.append(["sudo", "apk", "add", "chromium"])
-
-    if not commands:
-        print("Could not find a package manager (apt-get, snap, dnf, pacman, apk) to install chromium.")
-        print("Please install Chromium or another browser manually.")
-        return
-
-    try:
-        for cmd in commands:
-            print(f"Running command: {' '.join(cmd)}")
-            res = subprocess.run(cmd, capture_output=True, text=True)
-            if res.returncode != 0:
-                print(f"Command failed with code {res.returncode}")
-                if res.stderr:
-                    print(res.stderr.strip())
-                raise RuntimeError("Command failed")
-        print("Chromium installed successfully!")
-    except Exception as exc:
-        print(f"Failed to automatically install Chromium: {exc}")
-        print("Please install Chromium or another supported browser manually using your system package manager:")
-        print("  - Ubuntu/Debian: sudo apt-get update && sudo apt-get install -y chromium-browser")
-        print("  - Snap: sudo snap install chromium")
-        print("  - Fedora: sudo dnf install chromium")
-        print("  - Arch: sudo pacman -S chromium")
-
-
-def _resolve_debug_browser_path() -> str:
-    configured = Settings().edge_path
-    if configured and (os.name == "nt" or configured != _DEFAULT_EDGE_PATH):
-        return configured
-    if os.name == "nt":
-        return _DEFAULT_EDGE_PATH
-
-    if sys.platform.startswith("linux"):
-        analysis = _analyse_installed_browsers()
-        priority_order = ["chromium", "chrome", "edge", "firefox"]
-
-        for cat in priority_order:
-            path = analysis.get(cat)
-            if path:
-                return path
-
-        # Make if browser not installed
-        _attempt_install_chromium()
-
-        # Check again after trying to install
-        analysis = _analyse_installed_browsers()
-        for cat in priority_order:
-            path = analysis.get(cat)
-            if path:
-                return path
-    elif sys.platform.startswith("darwin"):
-        _MACOS_BROWSER_PRIORITY = (
-            "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
-            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-            "/Applications/Chromium.app/Contents/MacOS/Chromium",
-        )
-
-        for candidate in _MACOS_BROWSER_PRIORITY:
-            if Path(candidate).exists():
-                return candidate
-        for candidate in ("microsoft-edge", "google-chrome", "chromium", "firefox"):
-            resolved = shutil.which(candidate)
-            if resolved:
-                return resolved
-
-    raise RuntimeError(
-        "Could not automatically locate a supported browser (Edge, Chrome, Chromium, Firefox) on your system.\n"
-        "Please install Microsoft Edge, Google Chrome, or Firefox, or configure the 'edge_path' setting in your 'config.ini' "
-        "with the absolute path to your browser executable."
-    )
-
-
-def _debug_browser_profile_dir(browser_path: str) -> Path:
-    profile = "firefox-profile" if "firefox" in browser_path.lower() else "edge-profile"
-    return Path.cwd() / ".sessions" / profile
-
-
-def _edge_debug_tabs(cdp_port: int) -> list[dict] | None:
-    """Tabs from an already-running debug Edge, or None if none is reachable on the port."""
-    try:
-        with httpx.Client(timeout=1) as client:
-            return client.get(f"http://localhost:{cdp_port}/json").json()
-    except Exception:
-        return None
-
-
-async def _cdp_reload_m365(ws_url: str) -> None:
-    """Navigate an already-open debug tab back to the Copilot chat, forcing a fresh page load so a
-    new substrate WebSocket (carrying the access token) is created for capture."""
-    async with websockets.connect(ws_url) as ws:
-        await ws.send(
-            json.dumps(
-                {
-                    "id": 1,
-                    "method": "Page.navigate",
-                    "params": {"url": "https://m365.cloud.microsoft/chat"},
-                }
-            )
-        )
-        await asyncio.wait_for(ws.recv(), timeout=5)
-
-
-def _launch_debug_edge(cdp_port: int) -> None:
-    # If a debug M365 tab is already open, RELOAD it (don't just skip): an idle reused tab never
-    # opens a fresh substrate WebSocket, so the token capture would stall. Reloading re-triggers it
-    # without opening a duplicate window.
-    try:
-        edge_path = _resolve_debug_browser_path()
-        is_firefox = "firefox" in edge_path.lower()
-    except Exception:
-        edge_path = None
-        is_firefox = False
-
-    tabs = _edge_debug_tabs(cdp_port)
-    page = _find_m365_page(tabs) if tabs is not None else None
-    if page is not None and page.get("webSocketDebuggerUrl"):
-        try:
-            asyncio.run(_cdp_reload_m365(page["webSocketDebuggerUrl"]))
-            browser_name = "Firefox" if is_firefox else "Edge"
-            print(
-                f"{browser_name} already open; reloaded the M365 tab on port {cdp_port} to refresh the substrate token."
-            )
-            return
-        except Exception as exc:
-            print(
-                f"  ! could not reload the existing M365 tab ({exc}); opening a fresh window."
-            )
-
-    if not edge_path:
-        edge_path = _resolve_debug_browser_path()
-        is_firefox = "firefox" in edge_path.lower()
-
-    profile_dir = _debug_browser_profile_dir(edge_path)
-    profile_dir.mkdir(parents=True, exist_ok=True)
-
-    headless = Settings().edge_headless
-
-    if is_firefox:
-        argv = [
-            edge_path,
-            "--remote-debugging-port",
-            str(cdp_port),
-            "-profile",
-            str(profile_dir),
-            "-no-remote",
-        ]
-        if headless:
-            argv.append("--headless")
-        argv.append("https://m365.cloud.microsoft/chat")
-    else:
-        argv = [
-            edge_path,
-            f"--remote-debugging-port={cdp_port}",
-            f"--user-data-dir={profile_dir}",
-            "--no-first-run",
-        ]
-        if headless:
-            # Invisible refresh — works only if the profile is already signed in and the tenant
-            # does not require interactive WAM re-auth. First sign-in must be done non-headless.
-            argv += ["--headless=new", "--disable-gpu"]
-        argv.append("https://m365.cloud.microsoft/chat")
-
-    # Detach from this process's job object so Edge/Firefox survives when the launcher exits / serve restarts.
-    # NOTE: launched VISIBLE (not minimized) — the substrate token is captured from the page's
-    # WebSocket, which only opens when the chat actually loads/interacts, so the window must be usable.
-    flags = 0x00000008 | 0x01000000 | 0x00000200 if os.name == "nt" else 0
-    subprocess.Popen(argv, creationflags=flags, close_fds=True)
-
-    browser_name = "Firefox" if is_firefox else "Edge"
-    print(
-        f"{browser_name} launched ({'headless' if headless else 'visible'}) with remote debugging on port {cdp_port}."
-    )
-    print(f"Dedicated {browser_name} profile: {profile_dir}")
-    print("Sign in to M365 Copilot in that window once, then retry refresh.")
-
-
-def check_command(_args) -> None:
-    print("Analyzing installed browsers on your system...")
-
-    # Analyze
-    analysis = _analyse_installed_browsers()
-
-    # Priority order
-    priority_order = ["chromium", "chrome", "edge", "firefox"]
-
-    found_any = False
-    for cat in priority_order:
-        path = analysis.get(cat)
-        if path:
-            print(f"  [FOUND] {cat}: {path}")
-            found_any = True
-        else:
-            print(f"  [NOT FOUND] {cat}")
-
-    if not found_any:
-        print("\nNo supported browsers are installed on your system.")
-        print("We will attempt to automatically install Chromium if needed.")
-    else:
-        # Resolve which browser would be chosen
-        try:
-            chosen = _resolve_debug_browser_path()
-            print(f"\nResolved browser for token capture: {chosen}")
-        except Exception as exc:
-            print(f"\nError resolving browser: {exc}")
+    except RuntimeError as exc:
+        raise SystemExit(f"Error: {exc}") from None
 
 
 def set_token_command(_args) -> None:
@@ -989,7 +669,7 @@ def set_token_command(_args) -> None:
 def capture_token_command(args: argparse.Namespace) -> None:
     print("Listening for a Substrate WebSocket token...")
     print(
-        "In the debug Edge M365 Copilot tab, click the message box and type one character. Do not need to send."
+        "In the remote Chromium M365 Copilot tab, click the message box and type one character. No need to send."
     )
     token = asyncio.run(
         _cdp_capture_websocket_token(args.cdp_port, args.timeout_seconds)
@@ -999,7 +679,6 @@ def capture_token_command(args: argparse.Namespace) -> None:
         return
     _write_token(token)
     print(".env updated with Substrate token.")
-    _close_debug_browser(args.cdp_port)
 
 
 _CLAUDE_SETTINGS = Path.home() / ".claude" / "settings.json"
@@ -1120,12 +799,6 @@ def configure_command(args: argparse.Namespace) -> None:
     _configure_clients(undo=args.undo)
 
 
-def tray_command(_args: argparse.Namespace) -> None:
-    from .tray_app import run_tray
-
-    run_tray()
-
-
 def _attach_parent_console() -> None:
     """The windowed build has no console. If launched from a terminal, attach to the parent
     console so CLI subcommands (serve/configure/--help/set-token) show output and read input.
@@ -1146,14 +819,97 @@ def _attach_parent_console() -> None:
         pass
 
 
+def _resolve_compose_file() -> Path:
+    candidates = [Path.cwd() / "compose.server.yml", Path(__file__).parents[2] / "compose.server.yml"]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    raise RuntimeError(
+        "Chromium lifecycle requires compose.server.yml, but no compose file was found in the current directory or project root."
+    )
+
+
+def _run_compose(*args: str) -> None:
+    compose_file = _resolve_compose_file()
+    cmd = ["docker", "compose", "-f", str(compose_file), *args]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True)
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            "Chromium lifecycle requires Docker Compose (`docker compose`), but `docker` is not available in PATH."
+        ) from exc
+    if result.returncode == 0:
+        return
+
+    detail = (result.stderr or result.stdout or "").strip()
+    lowered = detail.lower()
+    if "permission denied" in lowered and "docker api" in lowered:
+        sg_cmd = ["sg", "docker", "-c", shlex.join(cmd)]
+        try:
+            sg_result = subprocess.run(sg_cmd, capture_output=True, text=True)
+        except FileNotFoundError:
+            sg_result = None
+        if sg_result is not None:
+            if sg_result.returncode == 0:
+                return
+            sg_detail = (sg_result.stderr or sg_result.stdout or "").strip()
+            if sg_detail:
+                detail = f"{detail}\nFallback via `sg docker` also failed:\n{sg_detail}"
+
+    if detail:
+        raise RuntimeError(
+            f"Docker Compose command failed: {' '.join(cmd)}\n{detail}"
+        )
+    raise RuntimeError(f"Docker Compose command failed: {' '.join(cmd)}")
+
+
+def _start_chromium_container() -> None:
+    _run_compose("up", "-d", "chromium")
+
+
+def _stop_chromium_container() -> None:
+    _run_compose("stop", "chromium")
+
+
 def serve_command(args: argparse.Namespace) -> None:
     base_url = f"http://{args.host}:{args.port}"
     wire = bool(getattr(args, "configure_clients", True))
+    manage_chromium = bool(getattr(args, "manage_chromium", True))
+    chromium_started = False
+    previous_sigterm_handler = None
+
+    def handle_sigterm(_signum, _frame) -> None:
+        raise KeyboardInterrupt
+
     if wire:
         _configure_clients(undo=False, base_url=base_url)
     try:
+        if manage_chromium:
+            print("Starting docker chromium service...")
+            try:
+                _start_chromium_container()
+                chromium_started = True
+                print("Docker chromium service is running.")
+            except RuntimeError as exc:
+                if _wait_for_m365_page(args.cdp_port, 2):
+                    print(
+                        "Warning: Docker Chromium could not be started, but a reachable CDP browser was found; continuing with existing browser."
+                    )
+                    print(f"Docker startup error: {exc}")
+                else:
+                    raise
+            if hasattr(signal, "SIGTERM"):
+                previous_sigterm_handler = signal.signal(signal.SIGTERM, handle_sigterm)
         _run_server(args)
     finally:
+        if previous_sigterm_handler is not None:
+            signal.signal(signal.SIGTERM, previous_sigterm_handler)
+        if manage_chromium and chromium_started:
+            try:
+                print("Stopping docker chromium service...")
+                _stop_chromium_container()
+            except Exception as exc:
+                print(f"Warning: failed to stop docker chromium service: {exc}")
         # Clean exits (q / Ctrl+C / window close) revert the wiring; a hard kill leaves it,
         # and the next `serve` re-applies it. So clients point at the proxy only while it runs.
         if wire:
@@ -1169,9 +925,6 @@ def _run_server(args: argparse.Namespace) -> None:
         stop_auto_refresh = threading.Event()
         auto_refresh_thread = None
         capture_thread = None
-
-        if args.launch_edge:
-            _launch_debug_edge(cdp_port)
 
         thread = threading.Thread(target=server.run, daemon=True)
         thread.start()
@@ -1244,7 +997,7 @@ def _run_server(args: argparse.Namespace) -> None:
             print("Refreshing token...")
             if not _try_auto_refresh(cdp_port):
                 print(
-                    "Auto-refresh failed (Edge not running with --remote-debugging-port)."
+                    "Auto-refresh failed (remote Chromium CDP is not reachable)."
                 )
                 print("Falling back to manual mode.")
                 set_token_command(None)

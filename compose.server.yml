@@ -1,0 +1,14 @@
+services:
+  chromium:
+    build: ./docker/browser
+    restart: unless-stopped
+    shm_size: 1gb
+    volumes:
+      - chromium-profile:/data
+      - ./docker/browser/entrypoint.sh:/entrypoint.sh:ro
+    ports:
+      - "127.0.0.1:6080:6080"
+      - "127.0.0.1:9222:9222"
+
+volumes:
+  chromium-profile:

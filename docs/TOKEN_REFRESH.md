@@ -5,7 +5,7 @@ The `substrate.office.com` API requires a user JWT that expires in ~1 hour. Admi
 ## Current manual flow
 
 ```powershell
-uv run copilot-openai-proxy set-token
+uv run copilot-proxy-server set-token
 # paste full WebSocket URL from DevTools → Network → substrate WebSocket → Headers
 ```
 
@@ -53,26 +53,33 @@ Launch a dedicated browser profile with the remote debugging flag, then connect 
 
 **Start the server:**
 ```powershell
-uv run copilot-openai-proxy serve
+uv run copilot-proxy-server serve
 ```
 
-`serve` opens the dedicated debug browser window by default. Sign in to M365 Copilot in that window once.
-The profile is stored under
-`.\.sessions\edge-profile`, so later launches can reuse the sign-in.
-Then the server connects to `http://localhost:9222` and extracts the token from the Copilot tab.
-`uv run copilot-openai-proxy serve` starts an auto-refresh loop by default. It refreshes when the
+By default, `serve` starts the bundled Docker Chromium service and stops it when the server exits. Docker Compose must be available or startup fails. Point the proxy at the published CDP endpoint:
+
+```ini
+# config.ini
+[settings]
+browser_cdp_url = http://127.0.0.1:9222
+```
+
+Then open [http://127.0.0.1:6080/vnc.html](http://127.0.0.1:6080/vnc.html), sign in to M365 Copilot once, and keep that tab/profile for refresh capture. To use an external browser instead, start with `--no-manage-chromium`.
+The server reads tabs from `browser_cdp_url` (or falls back to `http://localhost:9222`) and extracts tokens from the Copilot tab.
+
+`uv run copilot-proxy-server serve` starts an auto-refresh loop by default. It refreshes when the
 current JWT has less than 5 minutes left.
 If the current token is missing, expired, or not a Substrate token, `serve` first tries the same `r`-style
-refresh from the current debug browser tab. If no Substrate token is available yet, it starts a one-shot
-startup capture listener. Generate a new WebSocket by pressing `F5` in the debug browser Copilot tab, clicking
+refresh from the current remote Chromium tab. If no Substrate token is available yet, it starts a one-shot
+startup capture listener. Generate a new WebSocket by pressing `F5` in the remote Chromium Copilot tab, clicking
 the message box, and typing one character. The message does not need to be sent.
 
 Useful serve flags:
 ```powershell
-uv run copilot-openai-proxy serve --refresh-before-seconds 300
-uv run copilot-openai-proxy serve --no-launch-edge
-uv run copilot-openai-proxy serve --no-capture-on-start
-uv run copilot-openai-proxy serve --no-auto-refresh
+uv run copilot-proxy-server serve --refresh-before-seconds 300
+uv run copilot-proxy-server serve
+uv run copilot-proxy-server serve --no-capture-on-start
+uv run copilot-proxy-server serve --no-auto-refresh
 ```
 
 **Pros:** lightweight, uses `websockets` (already installed), works even if the normal browser is already open  

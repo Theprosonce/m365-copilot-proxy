@@ -7,28 +7,26 @@ $ErrorActionPreference = "Stop"
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Resolve-Path (Join-Path $scriptDir "..")
 Set-Location $root
-$exe = Join-Path $root "dist\m365-copilot-proxy.exe"
+$exe = Join-Path $root "dist\copilot-proxy-server.exe"
 
 # [0/3] Kill any running instance, otherwise the locked .exe can't be overwritten/signed
 #       (a stray instance silently leaves the OLD binary in place -> "it didn't update").
 Write-Host "[0/3] Stopping any running instance..." -ForegroundColor Cyan
 # Match by NAME too: a onefile exe runs from a temp _MEI path, so matching only $_.Path misses it
 # and the file stays locked at sign time.
-Get-Process -Name "m365-copilot-proxy" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Get-Process -Name "copilot-proxy-server" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 Get-Process -ErrorAction SilentlyContinue |
     Where-Object { $_.Path -eq $exe } |
     ForEach-Object { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue }
 Start-Sleep -Seconds 2
 
 Write-Host "[1/3] Clean PyInstaller build..." -ForegroundColor Cyan
-Remove-Item -Recurse -Force "$root\build", "$root\dist", "$root\m365-copilot-proxy.spec" -ErrorAction SilentlyContinue
+Remove-Item -Recurse -Force "$root\build", "$root\dist", "$root\copilot-proxy-server.spec" -ErrorAction SilentlyContinue
 & "$root\.venv\Scripts\python.exe" -m PyInstaller --noconfirm --clean --onefile --windowed `
-    --name m365-copilot-proxy --icon "assets\icon.ico" `
-    --collect-data m365_copilot_openai_proxy `
-    --collect-submodules m365_copilot_openai_proxy `
+    --name copilot-proxy-server --icon "assets\icon.ico" `
+    --collect-data copilot_proxy_server `
+    --collect-submodules copilot_proxy_server `
     --collect-all uvicorn `
-    --collect-all customtkinter `
-    --collect-all pystray `
     packaging\build_entry.py
 if (-not (Test-Path $exe)) { throw "build failed: $exe not found" }
 

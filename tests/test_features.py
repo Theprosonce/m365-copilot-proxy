@@ -11,26 +11,26 @@ from urllib.parse import quote
 
 from fastapi.testclient import TestClient
 
-from m365_copilot_openai_proxy.app import (
+from copilot_proxy_server.app import (
     _conversation_key,
     _first_real_user_text,
     _trim_history,
     create_app,
 )
-from m365_copilot_openai_proxy.config import Settings
-from m365_copilot_openai_proxy.models import ContentPart, ExtractedImage, OpenAIMessage
-from m365_copilot_openai_proxy.session_store import (
+from copilot_proxy_server.config import Settings
+from copilot_proxy_server.models import ContentPart, ExtractedImage, OpenAIMessage
+from copilot_proxy_server.session_store import (
     PersistentSession,
     PersistentSessionStore,
 )
-from m365_copilot_openai_proxy.substrate_client import (
+from copilot_proxy_server.substrate_client import (
     MAX_SUBSTRATE_SEND_CHARS,
     SubstrateCopilotClient,
     _combine_text,
     _truncate_substrate_text,
     resolve_tone,
 )
-from m365_copilot_openai_proxy.translator import (
+from copilot_proxy_server.translator import (
     ext_tool_context,
     extract_file_attachments,
     extract_images,
@@ -38,7 +38,7 @@ from m365_copilot_openai_proxy.translator import (
     translate_openai_request,
     translate_responses_request,
 )
-from m365_copilot_openai_proxy.models import (
+from copilot_proxy_server.models import (
     AnthropicMessagesRequest,
     OpenAIChatRequest,
     OpenAIResponsesRequest,
@@ -866,7 +866,7 @@ def test_history_images_before_assistant_are_excluded(tmp_path) -> None:
 
 def test_concurrency_semaphore() -> None:
     import asyncio
-    from m365_copilot_openai_proxy.substrate_client import get_concurrency_semaphore
+    from copilot_proxy_server.substrate_client import get_concurrency_semaphore
 
     async def run_test():
         entered: list[int] = []
@@ -898,7 +898,7 @@ def test_concurrency_semaphore() -> None:
 def test_shared_httpx_client() -> None:
     import asyncio
     import httpx
-    from m365_copilot_openai_proxy.substrate_client import get_shared_httpx_client
+    from copilot_proxy_server.substrate_client import get_shared_httpx_client
 
     async def run_test():
         client1 = get_shared_httpx_client()

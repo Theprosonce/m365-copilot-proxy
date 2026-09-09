@@ -36,7 +36,7 @@ def _get_raw_log_path(log_dir: str, name_pattern: str) -> Path:
 def log_event(event_name: str, payload: Any) -> None:
     """Logs a diagnostic event as a JSON line to the configured log file."""
     try:
-        from m365_copilot_openai_proxy.config import Settings
+        from copilot_proxy_server.config import Settings
         settings = Settings()
         enabled = getattr(settings, "debug_tooling_json_log_enabled", False)
         log_file_name = getattr(settings, "debug_tooling_json_log_file", ".sessions/logs/debug_tooling.jsonl")
@@ -115,7 +115,7 @@ def truncate_strings(data: Any, max_chars: int) -> Any:
 def log_raw_event(status: str, payload: Any) -> None:
     """Logs a raw diagnostic event in format: [time] [Status] : raw json"""
     try:
-        from m365_copilot_openai_proxy.config import Settings
+        from copilot_proxy_server.config import Settings
         settings = Settings()
         enabled = getattr(settings, "debug_tooling_raw_log_enabled", False)
         log_dir = getattr(settings, "debug_tooling_raw_log_dir", ".sessions/logs")

@@ -5,7 +5,7 @@ import re
 import uuid
 from typing import Any
 
-from m365_copilot_openai_proxy.models import AnthropicMessagesRequest, OpenAIChatRequest, ToolCall
+from copilot_proxy_server.models import AnthropicMessagesRequest, OpenAIChatRequest, ToolCall
 from .adapters import (
     anthropic_tools_to_standard,
     openai_functions_to_standard,

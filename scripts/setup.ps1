@@ -4,7 +4,6 @@
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File .\scripts\setup.ps1
     powershell -ExecutionPolicy Bypass -File .\scripts\setup.ps1 serve
-    powershell -ExecutionPolicy Bypass -File .\scripts\setup.ps1 serve --no-launch-edge
 #>
 $ErrorActionPreference = "Stop"
 
@@ -27,4 +26,4 @@ if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
 }
 
 uv sync
-uv run copilot-openai-proxy @args
+uv run copilot-proxy-server @args

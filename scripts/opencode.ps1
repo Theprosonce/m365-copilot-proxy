@@ -2,7 +2,7 @@
 .SYNOPSIS
     Idempotent update/removal of ~/.config/opencode/opencode.json (Windows).
 .DESCRIPTION
-    Without arguments, merges the "m365-copilot-proxy" provider into the config.
+    Without arguments, merges the "copilot-proxy-server" provider into the config.
     With -Remove (or --remove), removes that provider.
 .PARAMETER Remove
     Remove the provider instead of merging.
@@ -26,9 +26,9 @@ $NEW_CONTENT = @'
 {
   "$schema": "https://opencode.ai/config.json",
   "provider": {
-    "m365-copilot-proxy": {
+    "copilot-proxy-server": {
       "npm": "@ai-sdk/openai-compatible",
-      "name": "M365 Copilot Proxy",
+      "name": "Copilot Proxy Server",
       "options": {
         "baseURL": "http://127.0.0.1:8000/v1",
         "apiKey": "dummy"
@@ -140,9 +140,9 @@ function Do-Remove {
     $existing = Get-Content $CONFIG_FILE -Raw | ConvertFrom-Json
 
     # Check if the provider exists
-    if ($existing.provider -and $existing.provider.PSObject.Properties['m365-copilot-proxy']) {
+    if ($existing.provider -and $existing.provider.PSObject.Properties['copilot-proxy-server']) {
         # Remove the specific provider
-        $existing.provider.PSObject.Properties.Remove('m365-copilot-proxy')
+        $existing.provider.PSObject.Properties.Remove('copilot-proxy-server')
 
         # If provider is now empty, remove it as well
         if ($existing.provider.PSObject.Properties.Count -eq 0) {
@@ -154,7 +154,7 @@ function Do-Remove {
 
         if ($oldContent -ne $newContent) {
             $newContent | Set-Content -Path $CONFIG_FILE -Encoding utf8
-            Write-Host "Removed 'm365-copilot-proxy' provider from configuration."
+            Write-Host "Removed 'copilot-proxy-server' provider from configuration."
         } else {
             Write-Host "No changes. Provider was already absent."
         }

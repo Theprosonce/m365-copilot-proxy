@@ -2,7 +2,7 @@
 # Idempotent update/removal of ~/.config/opencode/opencode.json
 # Usage:
 #   ./opencode.sh          -> merge new settings (preserve existing)
-#   ./opencode.sh --remove -> remove the m365-copilot-proxy provider
+#   ./opencode.sh --remove -> remove the copilot-proxy-server provider
 
 set -euo pipefail
 
@@ -10,9 +10,9 @@ CONFIG_FILE="$HOME/.config/opencode/opencode.json"
 NEW_CONTENT='{
   "$schema": "https://opencode.ai/config.json",
   "provider": {
-    "m365-copilot-proxy": {
+    "copilot-proxy-server": {
       "npm": "@ai-sdk/openai-compatible",
-      "name": "M365 Copilot Proxy",
+      "name": "Copilot Proxy Server",
       "options": {
         "baseURL": "http://127.0.0.1:8000/v1",
         "apiKey": "dummy"
@@ -81,12 +81,12 @@ do_remove() {
 
     # Remove the specific provider from the .provider object
     # Then delete .provider if it becomes empty
-    jq 'del(.provider."m365-copilot-proxy") | if .provider == {} then del(.provider) else . end' \
+    jq 'del(.provider."copilot-proxy-server") | if .provider == {} then del(.provider) else . end' \
         "$CONFIG_FILE" > "$TMP_FILE"
 
     if ! cmp -s "$CONFIG_FILE" "$TMP_FILE"; then
         mv "$TMP_FILE" "$CONFIG_FILE"
-        echo "Removed 'm365-copilot-proxy' provider from configuration."
+        echo "Removed 'copilot-proxy-server' provider from configuration."
     else
         rm "$TMP_FILE"
         echo "No changes. Provider was already absent."

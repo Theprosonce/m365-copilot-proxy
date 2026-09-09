@@ -137,7 +137,7 @@ class SubstrateCopilotClient:
         if not access_token:
             raise SubstrateCopilotError(
                 "M365_ACCESS_TOKEN is missing in .env. Start the debug Edge window and let startup token capture complete, "
-                "or run `uv run copilot-openai-proxy set-token`."
+                "or run `uv run copilot-proxy-server set-token`."
             )
         self._token = access_token
         self._time_zone = time_zone

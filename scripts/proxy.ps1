@@ -2,16 +2,16 @@
 #
 # Replaces proxy-toggle.bat. One command:
 #   .\scripts\proxy.ps1               # toggle on/off; build-if-missing before the first start
-#   .\scripts\proxy.ps1 -ForceBuild   # rebuild dist\m365-copilot-proxy.exe even if it exists, then start
+#   .\scripts\proxy.ps1 -ForceBuild   # rebuild dist\copilot-proxy-server.exe even if it exists, then start
 #
 # What it does (when NOT running):
 #   1. ensure .venv exists (needed by PyInstaller in packaging\build-exe.ps1)
-#   2. ensure dist\m365-copilot-proxy.exe exists (locally built -> no Mark-of-the-Web ->
+#   2. ensure dist\copilot-proxy-server.exe exists (locally built -> no Mark-of-the-Web ->
 #      no SmartScreen warning, unlike the binary downloaded from GitHub releases)
 #   3. start that exe headless (`serve`) - windowless, listening on :8000
 #
 # What it does (when running):
-#   detects listener on :8000 and stops every m365-copilot-openai-proxy process
+#   detects listener on :8000 and stops every copilot-proxy-server process
 #   (same kill-by-image-path used in the old proxy-toggle.bat).
 #
 # macOS / Linux counterpart: proxy.sh (runs from source, no PyInstaller step).
@@ -27,7 +27,7 @@ $Root = Resolve-Path (Join-Path $PSScriptRoot "..")
 Set-Location $Root
 
 $port    = 8000
-$exeRel  = "dist\m365-copilot-proxy.exe"
+$exeRel  = "dist\copilot-proxy-server.exe"
 $exe     = Join-Path $Root $exeRel
 
 # --- 1. detect listener on :PORT ---------------------------------------------
@@ -40,7 +40,7 @@ foreach ($line in (netstat -ano)) {
 if ($active) {
     Write-Host "[M365 Proxy] running on :$port - STOPPING..." -ForegroundColor Yellow
     Get-Process -ErrorAction SilentlyContinue |
-        Where-Object { $_.Path -like '*m365-copilot-openai-proxy*' } |
+        Where-Object { $_.Path -like '*copilot-proxy-server*' } |
         Stop-Process -Force -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 1
     Write-Host "[M365 Proxy] stopped." -ForegroundColor Green

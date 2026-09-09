@@ -10,7 +10,7 @@ os.environ.setdefault("M365_TIME_ZONE", "Europe/Rome")
 os.environ.setdefault("M365_WORK_GROUNDING", "false")  # web grounding; work grounding derails coding agents
 os.environ.setdefault("M365_DEBUG", "1")
 
-from m365_copilot_openai_proxy.cli import main
+from copilot_proxy_server.cli import main
 
 if __name__ == "__main__":
     main()
