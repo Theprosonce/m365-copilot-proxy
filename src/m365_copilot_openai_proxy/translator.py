@@ -199,8 +199,8 @@ def translate_openai_request(request: OpenAIChatRequest, settings: Settings | No
                 del transcript_lines[i]
                 break
     else:
-        # A tool-result continuation must not repeat the earlier user request.
-        prompt = ""
+        # Agentic continuation: the last turn is a tool result or assistant action.
+        prompt = last_user_text
         if last_user_text:
             for i in range(len(transcript_lines) - 1, -1, -1):
                 if transcript_lines[i] == f"User: {last_user_text}":
@@ -398,9 +398,9 @@ def translate_anthropic_request(
                 del transcript_lines[i]
                 break
     else:
-        # Tool-result continuations carry only the new EXT_TOOL_OUTPUT data. The earlier user
-        # request already exists in the persistent substrate conversation and is not replayed.
-        prompt = ""
+        # Anthropic tool_result blocks are user-role messages without text. Treat
+        # those as agentic continuations, not as a repeat of an earlier user prompt.
+        prompt = last_user_text or last_user_text_current_turn
         if last_user_text:
             for i in range(len(transcript_lines) - 1, -1, -1):
                 if transcript_lines[i] == f"User: {last_user_text}":
