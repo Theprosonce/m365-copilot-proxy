@@ -12,12 +12,6 @@ dependencies = [
     "websockets>=12.0,<15.0",
 ]
 
-[project.optional-dependencies]
-dev = [
-    "pytest>=8.4.0,<9.0.0",
-    "pyinstaller>=6.0.0",
-]
-
 [project.scripts]
 copilot-proxy-server = "copilot_proxy_server.cli:main"
 
@@ -36,7 +30,6 @@ packages = ["src/copilot_proxy_server"]
 [tool.hatch.build.targets.wheel.force-include]
 "config/substrate.json" = "copilot_proxy_server/substrate.json"
 "config/config.ini.template" = "copilot_proxy_server/config.ini.template"
-"assets/icon.ico" = "copilot_proxy_server/icon.ico"
 "assets/icon.png" = "copilot_proxy_server/icon.png"
 
 [tool.pytest.ini_options]

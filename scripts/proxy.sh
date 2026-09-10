@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 # Unified toggle script for the M365 Copilot proxy (macOS / Linux).
-# Counterpart of proxy.ps1 on Windows.
 #
 # Usage:
 #   ./scripts/proxy.sh            # toggle on/off
@@ -9,9 +8,7 @@
 # Detects listener on :8000; if active, kills proxy processes; otherwise
 # ensures .venv + editable install and starts the headless server in background.
 #
-# We don't PyInstaller-build a binary here: Mark-of-the-Web exists only on
-# Windows, so running from source via the venv is the simplest path. For an
-# interactive foreground run, use run.sh instead.
+# For an interactive foreground run, use run.sh instead.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -32,8 +29,7 @@ fi
 # --- 2. running -> STOP -----------------------------------------------------
 if [ -n "$PID" ]; then
     echo "[M365 Proxy] running on :$PORT (pid $PID) - STOPPING..."
-    # Match the Python module name and the console-script entry; same kill-by-name
-    # spirit as proxy.ps1 / proxy-toggle.bat. Idempotent.
+    # Match both the Python module and console-script process names.
     pkill -f 'copilot_proxy_server' 2>/dev/null || true
     pkill -f 'copilot-proxy-server'      2>/dev/null || true
     sleep 1

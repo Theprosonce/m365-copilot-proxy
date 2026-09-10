@@ -4,7 +4,7 @@ The `substrate.office.com` API requires a user JWT that expires in ~1 hour. Admi
 
 ## Current manual flow
 
-```powershell
+```bash
 uv run copilot-proxy-server set-token
 # paste full WebSocket URL from DevTools → Network → substrate WebSocket → Headers
 ```
@@ -25,8 +25,7 @@ from playwright.async_api import async_playwright
 async def get_fresh_token() -> str:
     async with async_playwright() as p:
         browser = await p.chromium.launch_persistent_context(
-            user_data_dir="C:/Users/<user>/AppData/Local/Microsoft/Edge/User Data",
-            channel="msedge",
+            user_data_dir="/path/to/chromium-profile",
             headless=True,
         )
         token = None
@@ -52,7 +51,7 @@ Schedule with `schedule` or `apscheduler` every 50 minutes.
 Launch a dedicated browser profile with the remote debugging flag, then connect to it via CDP.
 
 **Start the server:**
-```powershell
+```bash
 uv run copilot-proxy-server serve
 ```
 
@@ -75,7 +74,7 @@ startup capture listener. Generate a new WebSocket by pressing `F5` in the remot
 the message box, and typing one character. The message does not need to be sent.
 
 Useful serve flags:
-```powershell
+```bash
 uv run copilot-proxy-server serve --refresh-before-seconds 300
 uv run copilot-proxy-server serve
 uv run copilot-proxy-server serve --no-capture-on-start
@@ -84,12 +83,6 @@ uv run copilot-proxy-server serve --no-auto-refresh
 
 **Pros:** lightweight, uses `websockets` (already installed), works even if the normal browser is already open  
 **Cons:** requires a separate browser profile; less reliable if the Copilot tab is closed
-
----
-
-## Option C — Windows WAM / MSAL broker
-
-`msal` with `allow_broker=True` on Windows 10/11 uses the OS-level Web Account Manager. Investigated but **not viable** — WAM token caches are per-app and the `substrate.office.com` resource requires pre-authorization (`AADSTS65002`), which blocks even cached token reuse from external client IDs.
 
 ---
 

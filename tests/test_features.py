@@ -201,7 +201,7 @@ def test_extract_file_attachments_ignores_missing_and_nonimage(tmp_path) -> None
 def test_first_real_user_text_skips_vscode_wrappers() -> None:
     msgs = [
         OpenAIMessage(
-            role="user", content="<environment_info>OS Windows</environment_info>"
+            role="user", content="<environment_info>OS Linux</environment_info>"
         ),
         OpenAIMessage(role="user", content="<workspace_info>tree</workspace_info>"),
         OpenAIMessage(role="user", content="the real question"),

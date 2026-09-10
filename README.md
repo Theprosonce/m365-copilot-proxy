@@ -25,49 +25,22 @@ Extended with a model picker, vision, protocol-neutral tool translation, tempora
 
 ## Quick Start
 
-One-command setup scripts install `uv` if needed, install dependencies, then start the proxy.
-
-```powershell
-# Windows
-powershell -ExecutionPolicy Bypass -File .\scripts\setup.ps1 serve
-# or
-scripts\setup.bat serve
-```
+This project supports Linux and macOS. Install dependencies and start the proxy:
 
 ```bash
-# Linux
 ./scripts/setup.sh serve
 ```
 
-If you already have `uv` installed, the equivalent manual commands are:
+If `uv` is already installed:
 
-```powershell
+```bash
 uv sync
 uv run copilot-proxy-server serve
 ```
 
-The server starts at:
+The server starts at `http://127.0.0.1:8000`. By default, `serve` starts the bundled Docker Chromium service and stops it when the proxy exits. Docker Compose is required.
 
-```text
-http://127.0.0.1:8000
-```
-
-By default, `serve` starts the bundled Docker Chromium service before hosting the API and stops that service when it exits. Docker Compose is required; startup fails if Chromium cannot be started.
-
-On first run, open the Chromium noVNC page, sign in to M365 Copilot, and keep the Copilot tab open. The proxy captures the Substrate token from that CDP session and writes it to `.env` as `M365_ACCESS_TOKEN`.
-
-If startup says it is waiting for a token, click the Copilot message box in Chromium and type one character. You do not need to send the message.
-
-### Docker-hosted Chromium (default)
-
-Set the CDP endpoint in `config.ini`:
-
-```ini
-[settings]
-browser_cdp_url = http://127.0.0.1:9222
-```
-
-Open [http://127.0.0.1:6080/vnc.html](http://127.0.0.1:6080/vnc.html), sign in to M365 Copilot once, and keep that profile. The proxy uses Docker Chromium the same way it uses a direct local browser.
+On first run, open the Chromium noVNC page at `http://127.0.0.1:6080/vnc.html`, sign in to M365 Copilot, and keep the Copilot tab open. The proxy captures the Substrate token from that CDP session and writes it to `.env` as `M365_ACCESS_TOKEN`.
 
 To use an externally managed browser instead, disable container management:
 
@@ -75,77 +48,24 @@ To use an externally managed browser instead, disable container management:
 uv run copilot-proxy-server serve --no-manage-chromium
 ```
 
-### Run from source (no .exe)
+### Project scripts
 
-Use this on machines where the signed release binaries are blocked by Application Control / Smart App Control. Source pulled via `git` carries no Mark-of-the-Web, so the interpreter runs normally.
-
-```powershell
-# clone, then from the repo root:
-powershell -ExecutionPolicy Bypass -File .\scripts\run.ps1            # headless API (default)
-powershell -ExecutionPolicy Bypass -File .\scripts\run.ps1 serve      # headless API
-```
+- `scripts/setup.sh`: first-run setup and launch.
+- `scripts/run.sh`: foreground development run.
+- `scripts/proxy.sh`: background toggle with optional `--reinstall`.
+- `scripts/opencode.sh`: add or remove the OpenCode provider configuration.
 
 ```bash
-./scripts/run.sh            # headless API (default)
-./scripts/run.sh serve      # headless API
-```
-
-The scripts use `uv` when available, otherwise fall back to a local `.venv` + `pip install -e .`. Equivalent one-liners without the scripts:
-
-```bash
-uv run copilot-proxy-server serve
-# or, without uv (after `pip install -e .`):
-python -m copilot_proxy_server serve
-```
-
-### Project layout
-
-Top-level files are kept for project metadata and documentation (`README.md`, `pyproject.toml`). Runtime, setup, and helper entry points live in `scripts/`, build and installer internals live in `packaging/`, and docs live in `docs/`.
-
-### Build / toggle scripts
-
-One unified command per platform that toggles the proxy on/off and ensures
-the runtime is in place before the first start.
-
-| Script | OS | Purpose |
-|---|---|---|
-| `scripts/setup.ps1` / `scripts/setup.bat` | Windows | First-run quick start: install `uv` if missing, run `uv sync`, then start the proxy. |
-| `scripts/setup.sh` | Linux | First-run quick start: install `uv` if missing, run `uv sync`, then start the proxy. |
-| `scripts/proxy.ps1` *(recommended on Windows)* | Windows | Toggle on/off; build the standalone exe if missing, then start it headless. `.\scripts\proxy.ps1` toggles, `.\scripts\proxy.ps1 -ForceBuild` rebuilds first. Locally built → no Mark-of-the-Web → no SmartScreen prompt. |
-| `scripts/proxy.sh` *(recommended on macOS / Linux)* | macOS / Linux | Toggle on/off; create the `.venv` + editable install on first start, then run headless from source in background. `./scripts/proxy.sh --reinstall` forces a fresh `pip install -e .`. |
-| `scripts/proxy-toggle.bat` | Windows | Simple toggle on/off of the venv console script. No build step — assumes `.venv` is already set up. |
-| `packaging/build-exe.ps1` | Windows | Explicit PyInstaller build of `dist\copilot-proxy-server.exe`, self-signed. Called automatically by `scripts/proxy.ps1` when the exe is missing. |
-| `scripts/run.ps1` / `scripts/run.sh` | All | Foreground run from source (`serve`). Use these for dev, not for "fire and forget". |
-
-```powershell
-# Windows
-powershell -ExecutionPolicy Bypass -File .\scripts\proxy.ps1              # toggle
-powershell -ExecutionPolicy Bypass -File .\scripts\proxy.ps1 -ForceBuild  # rebuild + start
-```
-
-```bash
-# macOS / Linux
-./scripts/proxy.sh              # toggle
-./scripts/proxy.sh --reinstall  # refresh editable install + start
+./scripts/proxy.sh
+./scripts/proxy.sh --reinstall
 ```
 
 ## Test It
 
-```powershell
-$body = @{
-  model = "m365-copilot"
-  messages = @(
-    @{ role = "user"; content = "Say hello in one short sentence." }
-  )
-} | ConvertTo-Json -Depth 10
-
-$r = Invoke-RestMethod `
-  -Method Post `
-  -Uri "http://127.0.0.1:8000/v1/chat/completions" `
-  -ContentType "application/json" `
-  -Body $body
-
-$r.choices[0].message.content
+```bash
+curl -s http://127.0.0.1:8000/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"m365-copilot","messages":[{"role":"user","content":"Say hello in one short sentence."}]}'
 ```
 
 ## Connect A Client
@@ -175,14 +95,6 @@ Append `:persist` to any id (e.g. `m365-opus:persist`) to reuse one Copilot conv
 ### **OpenCode**
 
 #### Option A: Temporary
-Windows:
-```powershell
-$env:OPENAI_BASE_URL = "http://127.0.0.1:8000"
-$env:OPENAI_API_KEY = "dummy"
-opencode
-```
-
-Linux:
 ```bash
 export OPENAI_BASE_URL="http://127.0.0.1:8000"
 export OPENAI_API_KEY="dummy"
@@ -198,29 +110,8 @@ m365-copilot
 #### Option B: Permanent
 
 
-Windows Setup:
+Setup:
 
-- **Add/update** the provider:
-  ```cmd
-  scripts\opencode.bat
-  ```
-  or
-  ```powershell
-  .\scripts\opencode.ps1
-  ```
-
-- **Remove** the provider:
-  ```cmd
-  scripts\opencode.bat --remove
-  ```
-  or
-  ```powershell
-  .\scripts\opencode.ps1 --remove
-  ```
-
-Config location: `%USERPROFILE%\.config\opencode\opencode.json`
-
-Linux Setup:
 ```bash
 chmod +x scripts/opencode.sh
 ./scripts/opencode.sh
@@ -249,9 +140,9 @@ Add this to `~/.continue/config.json`:
 
 ### Claude Code
 
-```powershell
-$env:ANTHROPIC_BASE_URL = "http://127.0.0.1:8000"
-$env:ANTHROPIC_API_KEY = "dummy"
+```bash
+export ANTHROPIC_BASE_URL="http://127.0.0.1:8000"
+export ANTHROPIC_API_KEY="dummy"
 claude
 ```
 
@@ -267,7 +158,6 @@ This makes M365 Copilot appear in the VS Code Chat model picker, with tools and 
 
 Edit `chatLanguageModels.json` in your VS Code user folder:
 
-- Windows: `%APPDATA%\Code\User\chatLanguageModels.json`
 - macOS: `~/Library/Application Support/Code/User/chatLanguageModels.json`
 - Linux: `~/.config/Code/User/chatLanguageModels.json`
 
@@ -338,13 +228,13 @@ M365 Copilot browser tokens usually expire in about 1 hour. The proxy refreshes 
 
 Auto-refresh is on by default:
 
-```powershell
+```bash
 uv run copilot-proxy-server serve
 ```
 
 Useful controls:
 
-```powershell
+```bash
 uv run copilot-proxy-server serve --refresh-before-seconds 300
 uv run copilot-proxy-server serve --no-auto-refresh
 uv run copilot-proxy-server serve --no-capture-on-start
@@ -355,7 +245,7 @@ You can also press `r` in the server console to refresh the token manually.
 
 ### Manual Fallback
 
-```powershell
+```bash
 uv run copilot-proxy-server set-token
 ```
 
@@ -372,9 +262,9 @@ The command extracts `access_token` automatically and writes it to `.env` as `M3
 
 ## Token Health
 
-```powershell
-Invoke-RestMethod http://127.0.0.1:8000/healthz
-Invoke-RestMethod http://127.0.0.1:8000/v1/token/status
+```bash
+curl -s http://127.0.0.1:8000/healthz
+curl -s http://127.0.0.1:8000/v1/token/status
 ```
 
 Example:
@@ -424,54 +314,27 @@ Each client chat maps to one Copilot conversation. The mapping key is, in order 
 
 ### Streaming
 
-```powershell
-$body = @{
-  model = "m365-copilot"
-  stream = $true
-  messages = @(@{ role = "user"; content = "hi" })
-} | ConvertTo-Json -Depth 10
-
-Invoke-RestMethod `
-  -Method Post `
-  -Uri "http://127.0.0.1:8000/v1/chat/completions" `
-  -ContentType "application/json" `
-  -Body $body
+```bash
+curl -N http://127.0.0.1:8000/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"m365-copilot","stream":true,"messages":[{"role":"user","content":"hi"}]}'
 ```
 
 ### Persistent Session
 
-```powershell
-$body = @{
-  model = "m365-copilot"
-  messages = @(
-    @{ role = "user"; content = "Remember this code word: sakura. Reply only OK." }
-  )
-} | ConvertTo-Json -Depth 10
-
-Invoke-RestMethod `
-  -Method Post `
-  -Uri "http://127.0.0.1:8000/v1/chat/completions" `
-  -Headers @{ "X-M365-Session-Id" = "test1" } `
-  -ContentType "application/json" `
-  -Body $body
+```bash
+curl -s http://127.0.0.1:8000/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -H 'X-M365-Session-Id: test1' \
+  -d '{"model":"m365-copilot","messages":[{"role":"user","content":"Remember this code word: sakura. Reply only OK."}]}'
 ```
 
 ### Anthropic-Style Messages
 
-```powershell
-$body = @{
-  model = "m365-copilot"
-  system = "Be concise."
-  messages = @(@{ role = "user"; content = "hi" })
-} | ConvertTo-Json -Depth 10
-
-$r = Invoke-RestMethod `
-  -Method Post `
-  -Uri "http://127.0.0.1:8000/v1/messages" `
-  -ContentType "application/json" `
-  -Body $body
-
-$r.content[0].text
+```bash
+curl -s http://127.0.0.1:8000/v1/messages \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"m365-copilot","system":"Be concise.","messages":[{"role":"user","content":"hi"}]}'
 ```
 
 ## Security Notes

@@ -15,11 +15,6 @@ import time
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
-try:
-    import msvcrt
-except ImportError:  # pragma: no cover - Windows-only module.
-    msvcrt = None
-
 import httpx
 import uvicorn
 import websockets
@@ -523,7 +518,6 @@ def _read_env_value(key: str) -> str | None:
 
 
 def main() -> None:
-    _attach_parent_console()
     settings = Settings()
     parser = argparse.ArgumentParser(
         prog="copilot-proxy-server",
@@ -799,26 +793,6 @@ def configure_command(args: argparse.Namespace) -> None:
     _configure_clients(undo=args.undo)
 
 
-def _attach_parent_console() -> None:
-    """The windowed build has no console. If launched from a terminal, attach to the parent
-    console so CLI subcommands (serve/configure/--help/set-token) show output and read input.
-    A double-click has no parent console, so this no-ops and the app stays a pure GUI."""
-    if os.name != "nt":
-        return
-    try:
-        import ctypes
-
-        if ctypes.windll.kernel32.AttachConsole(-1):  # ATTACH_PARENT_PROCESS
-            sys.stdout = open("CONOUT$", "w", encoding="utf-8", buffering=1)
-            sys.stderr = open("CONOUT$", "w", encoding="utf-8", buffering=1)
-            try:
-                sys.stdin = open("CONIN$", "r", encoding="utf-8")
-            except Exception:
-                pass
-    except Exception:
-        pass
-
-
 def _resolve_compose_file() -> Path:
     candidates = [Path.cwd() / "compose.server.yml", Path(__file__).parents[2] / "compose.server.yml"]
     for candidate in candidates:
@@ -959,16 +933,16 @@ def _run_server(args: argparse.Namespace) -> None:
         )
 
         action = None
-        # The [q]/[r] keyboard loop needs an interactive console. When launched without one
-        # (redirected stdin, background, .bat with start /min), just run the server; the
-        # auto-refresh thread keeps the token fresh regardless.
+        # Without an interactive terminal, run until stopped by a signal.
         kb_ok = bool(getattr(sys.stdin, "isatty", lambda: False)())
         try:
             while thread.is_alive():
-                if kb_ok and msvcrt is not None:
+                if kb_ok:
                     try:
-                        if msvcrt.kbhit():
-                            key = msvcrt.getwch().lower()
+                        import select
+
+                        if select.select([sys.stdin], [], [], 0)[0]:
+                            key = sys.stdin.read(1).lower()
                             if key == "q":
                                 action = "quit"
                                 server.should_exit = True
@@ -977,7 +951,7 @@ def _run_server(args: argparse.Namespace) -> None:
                                 action = "refresh"
                                 server.should_exit = True
                                 break
-                    except OSError:
+                    except (OSError, ValueError):
                         kb_ok = False
                 time.sleep(0.05)
         except KeyboardInterrupt:

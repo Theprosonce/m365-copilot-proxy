@@ -21,11 +21,6 @@ last_request.json
 .ruff_cache/
 .mypy_cache/
 
-# PyInstaller build artifacts (the .exe is built locally / attached to releases)
-build/
-dist/
-*.spec
-
 # Log files
 *.log
 logs/

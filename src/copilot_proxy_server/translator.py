@@ -87,12 +87,10 @@ def extract_file_attachments(text: str) -> list[ExtractedImage]:
     inlining it as a data: URI. Only image extensions, existing files, under the size cap."""
     if not text or "image:file://" not in text:
         return []
-    import os
-
     out: list[ExtractedImage] = []
     for m in _ATTACHMENT_RE.finditer(text):
         parsed_path = unquote(urlparse(m.group(1)).path)
-        path = Path(parsed_path if os.name != "nt" else parsed_path.lstrip("/"))
+        path = Path(parsed_path)
         ext = path.suffix.lower().lstrip(".")
         if ext not in _IMAGE_EXTS or not path.is_file():
             continue

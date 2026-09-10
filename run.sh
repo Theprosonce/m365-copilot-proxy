@@ -1,2 +1,2 @@
 #!/usr/bin/env bash
-uv run copilot-proxy-server serve
+uv run copilot-proxy-server

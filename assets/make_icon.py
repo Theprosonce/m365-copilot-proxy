@@ -49,6 +49,5 @@ arrow(int(cy - S * 0.10), int(S * 0.30), int(S * 0.72), +1)   # top -> right
 arrow(int(cy + S * 0.10), int(S * 0.70), int(S * 0.28), -1)   # bottom -> left
 
 base = img.resize((256, 256), Image.LANCZOS)
-base.save("assets/icon.ico", sizes=[(16,16),(24,24),(32,32),(48,48),(64,64),(128,128),(256,256)])
 base.save("assets/icon.png")
-print("icon written:", "assets/icon.ico", base.size)
+print("icon written:", "assets/icon.png", base.size)
