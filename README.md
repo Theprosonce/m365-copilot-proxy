@@ -28,19 +28,15 @@ Extended with a model picker, vision, protocol-neutral tool translation, tempora
 This project supports Linux and macOS. Install dependencies and start the proxy:
 
 ```bash
-./scripts/setup.sh serve
+./scripts/installer.sh --install
+uv run copilot-proxy-server
 ```
 
-If `uv` is already installed:
+The installer verifies Docker Compose, installs `uv` when needed, installs the locked project dependencies, builds the bundled Chromium/noVNC image, and validates both the noVNC and Chrome DevTools endpoints. Use `./scripts/installer.sh --uninstall` to remove project-managed containers, images, volumes, the virtual environment, and generated local state. Docker and `uv` remain installed because other projects may use them.
 
-```bash
-uv sync
-uv run copilot-proxy-server serve
-```
+The server listens on `0.0.0.0:8000`. Local clients can use `http://127.0.0.1:8000`, while remote clients use `http://<server>:8000`. By default, the bare command starts the bundled Docker Chromium service and stops it when the proxy exits.
 
-The server starts at `http://127.0.0.1:8000`. By default, `serve` starts the bundled Docker Chromium service and stops it when the proxy exits. Docker Compose is required.
-
-On first run, open the Chromium noVNC page at `http://127.0.0.1:6080/vnc.html`, sign in to M365 Copilot, and keep the Copilot tab open. The proxy captures the Substrate token from that CDP session and writes it to `.env` as `M365_ACCESS_TOKEN`.
+On first run, open the Chromium noVNC page at `http://127.0.0.1:6080/vnc.html` locally or `http://<server>:6080/vnc.html` remotely, sign in to M365 Copilot, and keep the Copilot tab open. TCP ports 8000 and 6080 must be allowed by the server firewall for remote client and noVNC access. Chrome DevTools remains restricted to `127.0.0.1:9222` and is used internally by the proxy. The proxy captures the Substrate token from that CDP session and writes it to `.env` as `M365_ACCESS_TOKEN`.
 
 To use an externally managed browser instead, disable container management:
 
@@ -50,7 +46,8 @@ uv run copilot-proxy-server serve --no-manage-chromium
 
 ### Project scripts
 
-- `scripts/setup.sh`: first-run setup and launch.
+- `scripts/installer.sh --install`: install and validate first-run prerequisites.
+- `scripts/installer.sh --uninstall`: remove project-managed runtime resources and local state.
 - `scripts/run.sh`: foreground development run.
 - `scripts/proxy.sh`: background toggle with optional `--reinstall`.
 - `scripts/opencode.sh`: add or remove the OpenCode provider configuration.
@@ -339,7 +336,7 @@ curl -s http://127.0.0.1:8000/v1/messages \
 
 ## Security Notes
 
-- The proxy listens on `127.0.0.1` by default.
+- The proxy listens on `0.0.0.0` by default. Local clients use `127.0.0.1`; remote clients use the server hostname or IP address.
 - The browser token is stored locally in `.env` as `M365_ACCESS_TOKEN`.
 - `config.ini`, `.env`, `.venv/`, `.sessions/`, Python cache files, and `*.har` captures are ignored by Git. HAR captures and debug logs can contain tokens, cookies, and tenant data — never commit them.
 - The proxy does not send your token to any external service besides Microsoft 365 Copilot's own `substrate.office.com` endpoint.

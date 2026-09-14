@@ -71,7 +71,7 @@ anthropic_creds_file =
 anthropic_key =
 
 [serve]
-host = 127.0.0.1
+host = 0.0.0.0
 port = 8000
 cdp_port = 9222
 auto_refresh = true

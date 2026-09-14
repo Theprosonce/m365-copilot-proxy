@@ -221,7 +221,9 @@ def create_app(
                 )
 
             text = await client.chat(prompt, ctx, session, tone, images)
-            calls, text = pipeline.tool_calls_from_text(text)
+            calls, text = await pipeline.tool_calls_with_failure_retry(
+                text, client, session, tone, images
+            )
         except ValueError as exc:
             print(f"[400] bad request: {exc}")
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -338,7 +340,9 @@ def create_app(
 
         try:
             text = await client.chat(prompt, ctx, session, tone)
-            calls, text = pipeline.tool_calls_from_text(text)
+            calls, text = await pipeline.tool_calls_with_failure_retry(
+                text, client, session, tone
+            )
         except SubstrateCopilotError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 
@@ -583,7 +587,9 @@ def create_app(
                 )
 
             text = await client.chat(prompt, ctx, session, tone, images)
-            calls, text = pipeline.tool_calls_from_text(text)
+            calls, text = await pipeline.tool_calls_with_failure_retry(
+                text, client, session, tone, images
+            )
             log_event("MODEL_RECV_RAW", {
                 "status_code": 200,
                 "raw": text,

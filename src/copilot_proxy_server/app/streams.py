@@ -76,7 +76,9 @@ async def _openai_stream(
         return
 
     pipeline = ToolMiddlewarePipeline()
-    calls, text = pipeline.tool_calls_from_text(full_text)
+    calls, text = await pipeline.tool_calls_with_failure_retry(
+        full_text, client, session, tone, images
+    )
     if calls:
         for tool_index, call in enumerate(calls):
             call_chunk = {
@@ -156,7 +158,9 @@ async def _responses_stream(
         return
 
     pipeline = ToolMiddlewarePipeline()
-    calls, text = pipeline.tool_calls_from_text(full_text)
+    calls, text = await pipeline.tool_calls_with_failure_retry(
+        full_text, client, session, tone
+    )
     if calls:
         output = _responses_output_from_tool_calls(calls)
         for index, item in enumerate(output):
@@ -256,7 +260,9 @@ async def _anthropic_stream(
         })
 
         pipeline = ToolMiddlewarePipeline()
-        calls, text = pipeline.tool_calls_from_text(full_text)
+        calls, text = await pipeline.tool_calls_with_failure_retry(
+            full_text, client, session, tone, images
+        )
 
         # 6. Extracted assistant text
         log_event("MODEL_RECV_EXTRACTED", {

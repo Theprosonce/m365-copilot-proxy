@@ -7,7 +7,9 @@ services:
       - chromium-profile:/data
       - ./docker/browser/entrypoint.sh:/entrypoint.sh:ro
     ports:
-      - "127.0.0.1:6080:6080"
+      # noVNC is remotely reachable; restrict TCP 6080 with the host firewall.
+      - "${VNC_BIND:-0.0.0.0}:6080:6080"
+      # Chrome DevTools is used internally by the proxy and stays host-local.
       - "127.0.0.1:9222:9222"
 
 volumes:

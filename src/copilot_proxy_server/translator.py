@@ -235,7 +235,9 @@ def translate_openai_request(request: OpenAIChatRequest, settings: Settings | No
         additional_context.append(f"System instructions:\n{ext_tool_context(tools)}")
     tool_results_text = _join_lines(tool_result_lines)
     if tool_results_text:
-        if not prompt:
+        if last is not None and last.role == "tool":
+            prompt = tool_results_text
+        elif not prompt:
             prompt = tool_results_text
         else:
             additional_context.append(f"Tool results:\n{tool_results_text}")

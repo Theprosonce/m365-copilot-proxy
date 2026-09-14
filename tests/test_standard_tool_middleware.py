@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
@@ -183,6 +184,31 @@ def test_invalid_tool_arguments_return_failure() -> None:
     assert text.startswith("EXT_TOOL_FAILURE: arguments for tool 'Read' failed JSON parsing")
     assert "near 'not-...'" in text
     assert text.endswith("Fix the payload and resend the complete EXT_TOOL block.")
+
+
+def test_ext_tool_failure_is_retried_upstream_before_returning() -> None:
+    pipeline = ToolMiddlewarePipeline(Settings(access_token="fake"))
+    malformed = 'EXT_TOOL: [{"name":"Read","arguments":"not-json"}] :END_EXT_TOOL'
+    corrected = 'EXT_TOOL: [{"id":"call_fixed","name":"Read","arguments":{"file_path":"README.md"}}] :END_EXT_TOOL'
+
+    class Client:
+        def __init__(self) -> None:
+            self.prompts = []
+
+        async def chat(self, prompt, additional_context, session, tone, images):
+            self.prompts.append(prompt)
+            return corrected
+
+    client = Client()
+    calls, text = asyncio.run(
+        pipeline.tool_calls_with_failure_retry(malformed, client)
+    )
+
+    assert text == ""
+    assert len(client.prompts) == 1
+    assert client.prompts[0].startswith("EXT_TOOL_FAILURE:")
+    assert calls is not None
+    assert calls[0].id == "call_fixed"
 
 
 def test_non_tool_call_text_passes_through() -> None:

@@ -105,6 +105,20 @@ class ToolMiddlewarePipeline:
 
         return calls, ""
 
+    async def tool_calls_with_failure_retry(
+        self,
+        text: str,
+        client: Any,
+        session: Any = None,
+        tone: str = "Magic",
+        images: Any = None,
+    ) -> tuple[list[ToolCall] | None, str]:
+        calls, text = self.tool_calls_from_text(text)
+        if text.startswith("EXT_TOOL_FAILURE:"):
+            text = await client.chat(text, [], session, tone, images)
+            calls, text = self.tool_calls_from_text(text)
+        return calls, text
+
     def anthropic_content_from_tool_calls(
         self, calls: list[ToolCall] | None, text: str
     ) -> list[dict[str, Any]]:

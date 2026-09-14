@@ -104,7 +104,7 @@ anthropic_creds_file =
 anthropic_key =
 
 [serve]
-host = 127.0.0.1
+host = 0.0.0.0
 port = 8000
 cdp_port = 9222
 auto_refresh = true
@@ -297,7 +297,7 @@ class Settings(BaseSettings):
     anthropic_key: str = Field(default="")
 
     # Serve command defaults. CLI flags still override these values.
-    serve_host: str = Field(default="127.0.0.1")
+    serve_host: str = Field(default="0.0.0.0")
     serve_port: int = Field(default=8000)
     serve_cdp_port: int = Field(default=9222)
     serve_auto_refresh: bool = Field(default=True)

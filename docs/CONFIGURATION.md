@@ -59,7 +59,7 @@ These settings allow sending non-M365 model queries directly to Anthropic:
 
 | Parameter | Default | Description |
 | :--- | :--- | :--- |
-| **`host`** | `127.0.0.1` | The local IP address to bind the FastAPI proxy server to. |
+| **`host`** | `0.0.0.0` | Bind the FastAPI proxy server to all network interfaces. Local clients use `127.0.0.1`; remote clients use the server hostname or IP address. |
 | **`port`** | `8000` | The port the proxy server listens on. |
 | **`cdp_port`** | `9222` | Fallback Chrome DevTools Protocol port when `browser_cdp_url` is not set. |
 | **`auto_refresh`** | `true` | Automatically run background token refreshing routines before token expiration. |
