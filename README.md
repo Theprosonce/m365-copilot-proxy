@@ -32,7 +32,7 @@ This project supports Linux and macOS. Install dependencies and start the proxy:
 uv run copilot-proxy-server
 ```
 
-The installer verifies Docker Compose, installs `uv` when needed, installs the locked project dependencies, builds the bundled Chromium/noVNC image, and validates both the noVNC and Chrome DevTools endpoints. Use `./scripts/installer.sh --uninstall` to remove project-managed containers, images, volumes, the virtual environment, and generated local state. Docker and `uv` remain installed because other projects may use them.
+The installer verifies Docker Compose, installs `uv` when needed, installs the locked project dependencies, builds the bundled Chromium/noVNC image, and validates both the noVNC and Chrome DevTools endpoints. Use `./scripts/installer.sh --reinstall` to reinstall dependencies and rebuild the browser image without cached layers. Use `./scripts/installer.sh --uninstall` to remove project containers and generated configuration while preserving Docker, `uv`, installed Python packages, images, volumes, and the virtual environment.
 
 The server listens on `0.0.0.0:8000`. Local clients can use `http://127.0.0.1:8000`, while remote clients use `http://<server>:8000`. By default, the bare command starts the bundled Docker Chromium service and stops it when the proxy exits.
 
@@ -47,7 +47,8 @@ uv run copilot-proxy-server serve --no-manage-chromium
 ### Project scripts
 
 - `scripts/installer.sh --install`: install and validate first-run prerequisites.
-- `scripts/installer.sh --uninstall`: remove project-managed runtime resources and local state.
+- `scripts/installer.sh --reinstall`: repair dependencies and rebuild the browser image without cache.
+- `scripts/installer.sh --uninstall`: remove project containers and generated configuration without uninstalling packages.
 - `scripts/run.sh`: foreground development run.
 - `scripts/proxy.sh`: background toggle with optional `--reinstall`.
 - `scripts/opencode.sh`: add or remove the OpenCode provider configuration.
